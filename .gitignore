@@ -1,0 +1,4 @@
+/cmd/pigeonmq-bookie/log/
+/cmd/pigeonmq-bookie/configs/
+/.idea
+/cmd/pigeonmq-bookie/storages
