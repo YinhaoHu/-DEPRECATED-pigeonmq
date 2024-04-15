@@ -7,10 +7,12 @@ import (
 	"net"
 	"net/rpc"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"pigeonmq/internal/util"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -22,10 +24,8 @@ const (
 	StateStopped
 )
 
-// TODO(Hoo@4-14): Task list
-//  -> Cmd: Let cmd bookie be able to run as a daemon.
+// TODO(Hoo): Task list
 //  -> Project structure: Reorganize file structure, methods structure, documents.
-//  -> Test: with concurrency, unreliability, test suit convenience .
 
 type segmentRole int32
 
@@ -132,7 +132,6 @@ func NewBookie(cfg *Config) (*Bookie, error) {
 
 	// everything goes well, runs the main loop now.
 	bk.setState(StateRunning)
-	go bk.mainLoop()
 	return bk, err
 }
 
@@ -159,12 +158,13 @@ func (bk *Bookie) Close() error {
 	if err != nil {
 		return err
 	}
-	bk.logger.Infof("Bookie(%v:%v) stopped.", bk.cfg.IPAddress, bk.cfg.Port)
 	return nil
 }
 
-func (bk *Bookie) mainLoop() {
-	bk.logger.Infof("Bookie starts running in main loop...")
+func (bk *Bookie) Run() {
+	bk.logger.Infof("Bookie [%v] starts running in main loop...", os.Getpid())
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	for bk.GetState() == StateRunning {
 		select {
 		case event := <-bk.eventCh:
@@ -176,6 +176,15 @@ func (bk *Bookie) mainLoop() {
 				args:        nil,
 			}
 			bk.handleEvent(event)
+		case <-sigCh:
+			bk.logger.Infof("Bookie [%v] shutting down...", os.Getpid())
+			closeErr := bk.Close()
+			if closeErr != nil {
+				bk.logger.Errorf("Bookie [%v] shut down with error : %v", os.Getpid(), closeErr)
+			} else {
+				bk.logger.Infof("Bookie [%v] shut down successfully", os.Getpid())
+			}
+			return
 		}
 	}
 }

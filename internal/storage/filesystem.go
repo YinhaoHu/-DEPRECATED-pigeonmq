@@ -150,7 +150,7 @@ func (bk *Bookie) appendAtSegmentOnFS(segmentName string, data []byte, off int64
 
 	// Update the header with the new length of the payload.
 	hdr := segmentHeader{
-		payloadSize: off + dataLen,
+		payloadSize: off + dataLen - segmentHeaderSize,
 		state:       0,
 	}
 	_, err = file.WriteAt(hdr.toBytes(), 0)

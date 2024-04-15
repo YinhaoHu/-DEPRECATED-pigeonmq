@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"pigeonmq/internal/storage"
-	"time"
 )
 
 var configPath string
@@ -16,9 +15,7 @@ func main() {
 	handleCmdline()
 
 	initBookie()
-	for bookie.GetState() == storage.StateRunning {
-		time.Sleep(1 * time.Second)
-	}
+	bookie.Run()
 }
 
 // initBookie create the bookie object.
