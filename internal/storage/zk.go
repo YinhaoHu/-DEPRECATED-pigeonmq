@@ -37,9 +37,6 @@ func (l *BookieZKLogger) Printf(str string, v ...interface{}) {
 func (bk *Bookie) initZK() error {
 	err := error(nil)
 
-	// initialize local fields.
-	bk.segments = make(map[string]*segment)
-
 	// connect to zk with options.
 	zkOptionSetLogger := func(conn *zk.Conn) {
 		zkLogger := &BookieZKLogger{bookieLogger: bk.logger}

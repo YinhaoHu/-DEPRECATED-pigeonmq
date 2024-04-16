@@ -3,7 +3,6 @@ package util
 import (
 	"fmt"
 	"io"
-	"os"
 	"sync"
 	"time"
 )
@@ -67,8 +66,9 @@ func (l *Logger) Errorf(format string, args ...interface{}) {
 }
 
 func (l *Logger) Fatalf(format string, args ...interface{}) {
-	l.log("FATAL", format, args...)
-	os.Exit(1)
+	msg := fmt.Sprintf(format, args...)
+	l.log("FATAL", msg)
+	panic(msg)
 }
 
 func (l *Logger) log(level, format string, args ...interface{}) {

@@ -42,8 +42,8 @@ func (sh *segmentHeader) toBytes() []byte {
 	return bytes
 }
 
-// initFilSystem initializes the file system part setting of bookie.
-func (bk *Bookie) initFilSystem() error {
+// initFileSystem initializes the file system part setting of bookie.
+func (bk *Bookie) initFileSystem() error {
 	err := error(nil)
 
 	// Check whether the directory path exists.
@@ -187,7 +187,7 @@ func (bk *Bookie) getSegmentHeaderOnFS(segmentName string) segmentHeader {
 
 	headerBytes := make([]byte, segmentHeaderSize)
 	if _, err := file.ReadAt(headerBytes, 0); err != nil {
-		bk.logger.Fatalf("getSegmentHeaderOnFS: failed to read header from segment file: %w", err)
+		bk.logger.Fatalf("getSegmentHeaderOnFS: failed to read header from segment file: %v", err)
 		return segmentHeader{}
 	}
 	header := newSegmentHeader(headerBytes)

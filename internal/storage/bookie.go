@@ -24,9 +24,6 @@ const (
 	StateStopped
 )
 
-// TODO(Hoo): Task list
-//  -> Project structure: Reorganize file structure, methods structure, documents.
-
 type segmentRole int32
 
 const (
@@ -104,31 +101,39 @@ func NewBookie(cfg *Config) (*Bookie, error) {
 	logFileBaseName := fmt.Sprintf("bookie-%v-%v.log", cfg.Port, os.Getpid())
 	logFilePath := filepath.Join(cfg.LogFilePath, logFileBaseName)
 	logFile, err := os.OpenFile(logFilePath, os.O_RDWR|os.O_CREATE, 0666)
+
 	if err != nil {
 		return nil, err
 	}
 	bk.logger = util.NewLogger(logFile, util.DebugLevel)
+	bk.logger.Infof("Bookie begins to initilize.")
 
 	// initialize the event handlers.
 	bk.eventCh = make(chan *Event, maxEventBackLog)
 
+	bk.segments = make(map[string]*segment)
+
+	bk.recovery()
 	// initialize the file system related fields of this bookie.
-	err = bk.initFilSystem()
+	err = bk.initFileSystem()
 	if err != nil {
 		return nil, err
 	}
+	bk.logger.Infof("Bookie initialize file system successfully.")
 
 	// initialize the zookeeper information of this bookie.
 	err = bk.initZK()
 	if err != nil {
 		return nil, err
 	}
+	bk.logger.Infof("Bookie initialize zookeeper successfully.")
 
 	// initialize the rpc.
 	err = bk.initRPC()
 	if err != nil {
 		return nil, err
 	}
+	bk.logger.Infof("Bookie initialize RPC server successfully.")
 
 	// everything goes well, runs the main loop now.
 	bk.setState(StateRunning)
@@ -144,8 +149,7 @@ func newSegment(role segmentRole, maxOffset int64, bookieZNodePath string, segme
 	return sg
 }
 
-// Close cleans the state of bookie.
-func (bk *Bookie) Close() error {
+func (bk *Bookie) shutDown() error {
 	if bk.GetState() == StateStopped {
 		return fmt.Errorf("already stopped")
 	}
@@ -161,8 +165,27 @@ func (bk *Bookie) Close() error {
 	return nil
 }
 
+// ShutDown cleans the state of bookie.
+func (bk *Bookie) ShutDown() {
+	bk.logger.Infof("Bookie [%v] shutting down...", os.Getpid())
+	closeErr := bk.shutDown()
+	if closeErr != nil {
+		bk.logger.Errorf("Bookie [%v] shut down with error : %v", os.Getpid(), closeErr)
+	} else {
+		bk.logger.Infof("Bookie [%v] shut down successfully", os.Getpid())
+	}
+
+}
+
 func (bk *Bookie) Run() {
+	defer func() {
+		if err := recover(); err != nil {
+			bk.logger.Errorf("Bookie panic, %v", err)
+		}
+		bk.ShutDown()
+	}()
 	bk.logger.Infof("Bookie [%v] starts running in main loop...", os.Getpid())
+	bk.logger.Infof("With config:\n %+v", bk.cfg.toJsonString())
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	for bk.GetState() == StateRunning {
@@ -177,13 +200,7 @@ func (bk *Bookie) Run() {
 			}
 			bk.handleEvent(event)
 		case <-sigCh:
-			bk.logger.Infof("Bookie [%v] shutting down...", os.Getpid())
-			closeErr := bk.Close()
-			if closeErr != nil {
-				bk.logger.Errorf("Bookie [%v] shut down with error : %v", os.Getpid(), closeErr)
-			} else {
-				bk.logger.Infof("Bookie [%v] shut down successfully", os.Getpid())
-			}
+			bk.ShutDown()
 			return
 		}
 	}

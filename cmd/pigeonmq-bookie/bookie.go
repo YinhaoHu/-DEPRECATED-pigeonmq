@@ -25,6 +25,7 @@ func initBookie() {
 
 	bookie, err = storage.NewBookie(cfg)
 	errCheckAndExit(err)
+	bookie.Run()
 }
 
 // handleCmdline parse the command line arguments, check whether the command line is legal and fetch the

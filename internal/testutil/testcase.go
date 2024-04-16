@@ -4,7 +4,10 @@ package testutil
 import (
 	"crypto/rand"
 	"fmt"
+	"os"
+	"os/signal"
 	"runtime"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -12,6 +15,17 @@ import (
 const (
 	TestConfigFilePath = "testdata/bookie-test.cfg"
 	TestSegmentName    = "t-seg"
+)
+
+const (
+	FontReset  = "\033[0m"
+	FontRed    = "\033[31m"
+	FontGreen  = "\033[32m"
+	FontYellow = "\033[33m"
+	FontBlue   = "\033[34m"
+	FontPurple = "\033[35m"
+	FontCyan   = "\033[36m"
+	FontGray   = "\033[90m"
 )
 
 // CheckErrorAndFatalAsNeeded checks whether err is nil and fatal if not.
@@ -98,6 +112,10 @@ func (t *TestCase) StartProgressBar(n int64) {
 	t.RefreshProgressBar(0)
 }
 
+func (t *TestCase) Ensure(content string) {
+	fmt.Printf("-> Make sure: %s\n", content)
+}
+
 // CheckAssumption checks a condition and fails the test case if the condition is false.
 func (t *TestCase) CheckAssumption(name string, condition func() bool) {
 	if !condition() {
@@ -114,4 +132,18 @@ func (t *TestCase) RefreshProgressBar(progress int64) {
 func (t *TestCase) EndProgressBar() {
 	fmt.Printf("\r%64s\r", " ")
 	t.totalProgress = 0
+}
+
+// WaitForCheckIfNeed waits the test user to check the related error if err is not nil before panic.
+func (t *TestCase) WaitForCheckIfNeed(err error) {
+	if err == nil {
+		return
+	}
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	fmt.Printf(FontRed+"Error happend, you might need to check this. When check is done, send SIGINT or SIGTERM.\n"+
+		"err: %v "+FontReset, err)
+	<-sigChan
+	fmt.Printf("\n\n")
 }

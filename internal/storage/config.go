@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -143,4 +144,9 @@ func getOneConfig(scanner *bufio.Scanner) (string, string, error) {
 		return "", "", err
 	}
 	return "", "", nil
+}
+
+func (cfg *Config) toJsonString() string {
+	jsonBytes, _ := json.MarshalIndent(*cfg, "", "  ")
+	return string(jsonBytes)
 }
