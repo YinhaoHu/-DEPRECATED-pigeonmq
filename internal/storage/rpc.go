@@ -3,6 +3,7 @@ package storage
 import (
 	"errors"
 	"fmt"
+	"github.com/go-zookeeper/zk"
 	"log"
 	"net"
 	"net/http"
@@ -45,13 +46,16 @@ func (bk *Bookie) CreatePrimarySegment(args *CreatePrimarySegmentArgs, _ *struct
 		log.Printf("zkBookies lock failed: %v", err)
 		return err
 	}
-	defer bk.zkBookiesLock.Unlock()
+	defer func(zkBookiesLock *zk.Lock) {
+		_ = zkBookiesLock.Unlock()
+	}(bk.zkBookiesLock)
 
 	// get bookies
 	peers, err := bk.getPeersOnZK()
 	if err != nil {
 		return err
 	}
+	bk.logger.Infof("Bookie got peers: %+v", peers)
 
 	// select followers.
 	segmentBookies := make(map[string]*segmentBookieZNode)
@@ -72,6 +76,7 @@ func (bk *Bookie) CreatePrimarySegment(args *CreatePrimarySegmentArgs, _ *struct
 		return zkErr
 	}
 	bk.segments[args.SegmentName] = newSegment(segmentRolePrimary, segmentHeaderSize, bookieZNodePath, segmentZNodePath)
+	bk.logger.Infof("Bookie created a new segment: %v", args.SegmentName)
 
 	// notify some peers that they are the followers now.
 	createBackupSegmentArgs := &CreateBackupSegmentArgs{args.SegmentName}
@@ -87,6 +92,8 @@ func (bk *Bookie) CreatePrimarySegment(args *CreatePrimarySegmentArgs, _ *struct
 		}()
 	}
 	wg.Wait()
+
+	bk.watchSegmentPeersBG(segmentZNodePath)
 
 	return err
 }
@@ -121,7 +128,7 @@ func (bk *Bookie) CreateBackupSegment(args *CreateBackupSegmentArgs, _ *struct{}
 
 	// create bookie znode in this segment.
 	segmentZNodePath := filepath.Join(filepath.Join(zkSegmentsPath, args.SegmentName))
-	bookieZNodePath, err := bk.createSegmentBookieOnZK(bk.address, segmentZNodePath)
+	bookieZNodePath, err := bk.createSegmentBookieOnZK(bk.address, segmentZNodePath, segmentHeaderSize)
 	if err != nil {
 		return err
 	}
@@ -158,7 +165,11 @@ func (bk *Bookie) ReadSegment(args *ReadSegmentArgs, reply *ReadSegmentReply) er
 		bk.logger.Infof("Bookie handled RPC ReadSegment, error=%v", err)
 	}()
 	// Read without lock.
-	maxSize := min(args.MaxSize, bk.segments[args.SegmentName].bound.Load()-args.BeginPos)
+	seg, exist := bk.segments[args.SegmentName]
+	if !exist {
+		return fmt.Errorf("bookie segment %v does not exist. Segments: %v", args.SegmentName, bk.segments)
+	}
+	maxSize := min(args.MaxSize, seg.bound.Load()-args.BeginPos)
 	reply.Data, reply.NBytes, err = bk.readSegmentOnFS(args.SegmentName, args.BeginPos, maxSize)
 
 	return err
@@ -178,7 +189,8 @@ type AppendPrimarySegmentReply struct {
 func (bk *Bookie) AppendPrimarySegment(args *AppendPrimarySegmentArgs, reply *AppendPrimarySegmentReply) error {
 	// Prepare response.
 	err := error(nil)
-	bk.logger.Infof("Bookie received RPC AppendPrimarySegment, args=%v", *args)
+	bk.logger.Infof("Bookie received RPC AppendPrimarySegment, segment=%v, dataLen=%v, timeout=%v",
+		args.SegmentName, len(args.Data), args.Timeout)
 	defer func() { bk.logger.Infof("Bookie handled RPC AppendPrimarySegment, error=%v", err) }()
 	segmentPath := filepath.Join(filepath.Join(zkSegmentsPath, args.SegmentName))
 
@@ -256,7 +268,7 @@ func (bk *Bookie) AppendBackupSegment(args *AppendBackupSegmentArgs, _ *struct{}
 	err := error(nil)
 	bk.logger.Infof("Bookie received RPC AppendBackupSegment, segmentName=%v, dataLen=%v",
 		args.SegmentName, len(args.Data))
-	go func() { bk.logger.Infof("Bookie hanlded AppendBackupSegment, error=%v", err) }()
+	defer func() { bk.logger.Infof("Bookie hanlded AppendBackupSegment, error=%v", err) }()
 
 	// Acquire mutex for this segment.
 	bk.segments[args.SegmentName].mutex.Lock()
@@ -300,12 +312,19 @@ func (bk *Bookie) AppendBackupSegment(args *AppendBackupSegmentArgs, _ *struct{}
 // initRPC initializes the RPC settings.
 func (bk *Bookie) initRPC() error {
 	err := error(nil)
+
 	// Register rpc and open the rpc server.
-	err = rpc.Register(bk)
+	bk.rpcServer = rpc.NewServer()
+	err = bk.rpcServer.Register(bk)
 	if err != nil {
 		panic(err)
 	}
-	rpc.HandleHTTP()
+	rpcPath := RPCPath(bk.address)
+	debugPath := fmt.Sprintf("/debug/gorpc_%v", bk.address)
+
+	bk.logger.Infof("RPC is handled in path: %v and debug path: %v", rpcPath, debugPath)
+	bk.rpcServer.HandleHTTP(rpcPath, debugPath)
+
 	address := bk.address
 	bk.rpcListener, err = net.Listen("tcp", address)
 	if err != nil {
@@ -316,13 +335,17 @@ func (bk *Bookie) initRPC() error {
 	bk.rpcClients.clients = make(map[string]*rpc.Client)
 
 	// Serve the rpc.
-	go http.Serve(bk.rpcListener, nil)
+	go func() {
+		_ = http.Serve(bk.rpcListener, nil)
+	}()
+
 	return err
 }
 
 // closeRPC cleans the RPC-related state.
 func (bk *Bookie) closeRPC() error {
 	err := error(nil)
+
 	// Close the RPC connections.
 	bk.rpcClients.rwMutex.Lock()
 	for _, client := range bk.rpcClients.clients {
@@ -331,6 +354,7 @@ func (bk *Bookie) closeRPC() error {
 		}
 	}
 	bk.rpcClients.rwMutex.Unlock()
+
 	// Close the RPC server.
 	if closeErr := bk.rpcListener.Close(); closeErr != nil {
 		errors.Join(err, closeErr)
@@ -340,21 +364,25 @@ func (bk *Bookie) closeRPC() error {
 
 // sendRPC is the wrapper for sending RPC with/without timeout.
 func (bk *Bookie) sendRPC(address string, method string, args interface{}, reply interface{}, timeout time.Duration) error {
+	reconnected := false
 	bk.rpcClients.rwMutex.RLock()
 	client, exists := bk.rpcClients.clients[address]
+start:
 	// If the connection to the specific RPC server does not open, open it.
 	if !exists {
 		bk.rpcClients.rwMutex.RUnlock()
 		bk.rpcClients.rwMutex.Lock()
 		client, exists = bk.rpcClients.clients[address]
 		// Checks whether the other goroutine has created the client.
-		if !exists {
-			newClient, err := rpc.DialHTTP("tcp", address)
+		if !exists || reconnected {
+			bk.logger.Infof("sendRPC: begin to connect to %v", address)
+			newClient, err := rpc.DialHTTPPath("tcp", address, RPCPath(address))
 			if err != nil {
 				bk.rpcClients.rwMutex.Unlock()
-				bk.logger.Errorf("sendRPC rpc.DialHTTP(tcp,%v) err %v", address, err)
+				bk.logger.Errorf("sendRPC: rpc.DialHTTP(tcp,%v) err %v", address, err)
 				return err
 			}
+			bk.logger.Infof("sendRPC: connected to %v", address)
 			bk.rpcClients.clients[address] = newClient
 		}
 		client = bk.rpcClients.clients[address]
@@ -375,6 +403,14 @@ func (bk *Bookie) sendRPC(address string, method string, args interface{}, reply
 		}
 	} else {
 		err = client.Call(method, args, reply)
+	}
+
+	if errors.Is(err, rpc.ErrShutdown) && !reconnected {
+		bk.logger.Infof("sendRPC: begin to reconnect %v", address)
+		exists = false
+		reconnected = true
+		bk.rpcClients.rwMutex.RLock()
+		goto start
 	}
 	return err
 }

@@ -19,7 +19,10 @@ import (
 //
 // Includes: segmentHeader, append, appendAt, read, close.
 func TestLocalFileSystem(t *testing.T) {
-	tb := NewTestBookie(testutil.TestConfigFilePath, TestBookieLocationSingle)
+	cfg, cfgErr := NewConfig(testutil.TestConfigFilePath)
+	testutil.CheckErrorAndFatalAsNeeded(cfgErr, t)
+
+	tb := NewTestBookie(cfg, TestBookieLocationSingle)
 	tc := testutil.NewTestCase("LocalFileSystem", t)
 	tc.Begin()
 	defer tc.Done()
@@ -111,7 +114,25 @@ func TestLocalFileSystem(t *testing.T) {
 	}
 }
 
+// TestCluster tests the concurrency correctness, fault-tolerance and scalability of
+// a single Bookie Ensemble.
 func TestCluster(t *testing.T) {
+	// What have been tested so far?
+	//  The basic fault-tolerance: follower leaves and re-joins.
+	//  Follower election.
+	//  The scalability is not tested, but theoretically it is correct.
+	//  Basic create primary/backup segment, read and append.
+	// TODO(Hoo-Future): Test more with consideration below,
+	//  [test convenience]
+	// 		-> Is there any approach to make integrate the shell assisted bookie restart into the same
+	//  	process for convenient testing?
+	//  	-> If the answer for the question above is NO, consider make the configuration file specification
+	//      more convenient, manually modify the config is too bad.
+	//  [test content]
+	// 		-> Fault-tolerance can be satisfied by out goal requirement?
+	//		-> Scalability and load balance is really correct?(Although it seems right theoretically)
+	//		-> Concurrency test: with distributed lock.
+	
 	tc := testutil.NewTestCase("Cluster", t)
 	tc.Begin()
 	defer tc.Done()
@@ -128,12 +149,17 @@ func TestCluster(t *testing.T) {
 	segmentCreated := false
 	// Connect to the zk servers so that some data can be clean.
 	zkOutput, openErr := os.OpenFile("testdata/zk.log", os.O_CREATE|os.O_RDWR, 0666)
+	_ = zkOutput.Truncate(0)
 	testutil.CheckErrorAndFatalAsNeeded(openErr, t)
 	zkOptionSetLogger := func(conn *zk.Conn) {
-		zkLogger := &testutil.TestZkPrinter{Out: zkOutput}
+		zkLogger := &testutil.TestZKPrinter{Out: zkOutput}
 		conn.SetLogger(zkLogger)
 	}
 	zkConn, _, zkErr := zk.Connect([]string{"127.0.0.1:18001"}, 3*time.Second, zkOptionSetLogger)
+
+	// NOTE: You might see an ERROR log entry in the bookie's log which is like "[ERROR] Failed to get the responsible
+	// bookies for this segment". The error is intended to happen because the zk first delete the segment znode and
+	// then shutdown the cluster. In the time window, the leaderCrash event will be sent.
 	defer func() {
 		if !segmentCreated {
 			return
@@ -147,33 +173,46 @@ func TestCluster(t *testing.T) {
 	testutil.CheckErrorAndFatalAsNeeded(zkErr, t)
 
 	// Set up the cluster configuration.
-	cluster := newTestBookieCluster(t, "bookie_1", "bookie_2", "bookie_3")
-	cluster.setupAll()
+	cfgTemplate, cfgErr := NewConfig(testutil.TestConfigFilePath)
+	testutil.CheckErrorAndFatalAsNeeded(cfgErr, t)
+	cluster := NewTestBookieCluster(t)
+	bookiePorts := []int{19001, 19002}
+	for _, port := range bookiePorts {
+		cluster.Join(cfgTemplate, port)
+	}
+	cluster.runBookieSh("bookie_3", "start")
+	// Wait for bookie_3 to start.
+	time.Sleep(300 * time.Millisecond)
+	cluster.StartAll()
 	defer func() {
-		cluster.teardownAll()
+		cluster.runBookieSh("bookie_3", "stop")
+		cluster.TearDownAll()
 		// Wait for the cluster is actually close before saying the test is done.
 		time.Sleep(1 * time.Second)
 	}()
 
-	bookiePorts := []string{"19001", "19002", "19003"}
 	bookieIPAddress := "127.0.0.1"
 	bookies := make([]*rpc.Client, 3)
-	for i, port := range bookiePorts {
+
+	makeRPCClient := func(bookieID int, port int) {
 		rpcErr := error(nil)
-		for nTick := 0; nTick < 3; nTick++ {
-			bookies[i], rpcErr = rpc.DialHTTP("tcp", fmt.Sprintf("%s:%s", bookieIPAddress, port))
-			if rpcErr != nil {
-				time.Sleep(1 * time.Second)
-			} else {
-				break
-			}
-		}
+		bookieAddress := fmt.Sprintf("%v:%v", bookieIPAddress, port)
+		rpcPath := RPCPath(bookieAddress)
+		bookies[bookieID], rpcErr = rpc.DialHTTPPath("tcp", bookieAddress, rpcPath)
 		tc.WaitForCheckIfNeed(rpcErr)
 		testutil.CheckErrorAndFatalAsNeeded(rpcErr, t)
 	}
+
+	for i, port := range bookiePorts {
+		makeRPCClient(i, port)
+	}
 	defer func() {
 		for _, cli := range bookies {
-			cli.Close()
+			err := cli.Close()
+			if err != nil {
+				fmt.Printf("rpcClient close error: %v", err)
+				return
+			}
 		}
 	}()
 
@@ -183,6 +222,9 @@ func TestCluster(t *testing.T) {
 	rpcCallWithoutError := func(whichBookie int, method string, args interface{}, reply interface{}) {
 		serviceMethod := fmt.Sprintf("Bookie.%s", method)
 		err := bookies[whichBookie].Call(serviceMethod, args, reply)
+		if err != nil {
+			fmt.Printf("Bookie %v call error. Error is listed below.\n", whichBookie)
+		}
 		testutil.CheckErrorAndFatalAsNeeded(err, t)
 	}
 
@@ -194,10 +236,13 @@ func TestCluster(t *testing.T) {
 	rpcCallWithoutError(0, "CreatePrimarySegment", cpsArgs, nil)
 	segmentCreated = true
 
+	cluster.runBookieSh("bookie_3", "stop")
+	downTime := time.Now()
+
 	// Append to leader.
 	appendData := make([][]byte, 0)
 	appendEntriesBeginPos := make([]int64, 0)
-	numEntries := 16
+	numEntries := 4
 	entrySize := int64(1024)
 	for i := 0; i < numEntries; i++ {
 		entry := testutil.GenerateData(entrySize)
@@ -212,15 +257,15 @@ func TestCluster(t *testing.T) {
 		appendEntriesBeginPos = append(appendEntriesBeginPos, apReply.BeginPos)
 	}
 
-	// Read from ...
-	checkEntry := func(get []byte, want []byte) {
-		if len(get) != len(want) {
-			t.Fatalf("Get length error: %v != %v", len(get), len(want))
-		}
-		if bytes.Compare(get, want) != 0 {
-			t.Fatalf("Get error: %v != %v", string(get), string(want))
-		}
+	cluster.runBookieSh("bookie_3", "start")
+	comeTime := time.Now()
+	if comeTime.Sub(downTime) > cfgTemplate.PermissibleDowntime {
+		t.Errorf("append time is too long %v", downTime)
 	}
+	// Wait for the leader to append data to the new follower.
+	time.Sleep(cfgTemplate.PermissibleDowntime + 1*time.Second)
+
+	// Read from ...
 	checkRead := func(bookieID int) {
 		for i := 0; i < numEntries; i++ {
 			readArgs := &ReadSegmentArgs{
@@ -229,15 +274,23 @@ func TestCluster(t *testing.T) {
 				MaxSize:     int64(len(appendData[i])),
 			}
 			readReply := &ReadSegmentReply{}
-			rpcCallWithoutError(1, "ReadSegment", readArgs, readReply)
-			checkEntry(readReply.Data, appendData[i])
+			rpcCallWithoutError(bookieID, "ReadSegment", readArgs, readReply)
+			want := appendData[i]
+			get := readReply.Data
+			if len(get) != len(want) {
+				t.Fatalf("Get from bookie %v length error: %v != %v", bookieID, len(get), len(want))
+			}
+			if bytes.Compare(get, want) != 0 {
+				t.Fatalf("Get from bookie %v error: %v != %v", bookieID, string(get), string(want))
+			}
 		}
 	}
 
 	// Give followers sometime to follow up.
 	time.Sleep(1 * time.Second)
 
-	for bookieID, _ := range bookies {
+	makeRPCClient(2, 19003)
+	for bookieID := range bookies {
 		checkRead(bookieID)
 	}
 }

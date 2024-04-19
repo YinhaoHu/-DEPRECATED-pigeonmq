@@ -41,7 +41,7 @@ if [[ $OPTION == "start" ]]; then
   else
     echo "Error occurred in starting bookie $BOOKIE_NAME."
   fi
-elif [[ $OPTION == "close" ]]; then
+elif [[ $OPTION == "stop" ]]; then
   sudo kill -s SIGTERM $(cat $PID_FILE)
   if [[ $? == 0 ]]; then
     echo "Bookie $BOOKIE_NAME terminated successfully."

@@ -48,7 +48,11 @@ func (bk *Bookie) initFileSystem() error {
 
 	// Check whether the directory path exists.
 	if _, err = os.Stat(bk.cfg.StorageDirectoryPath); os.IsNotExist(err) {
-		return fmt.Errorf("initFileSystem: storage directory path %v does not exists",
+		mkdirErr := os.MkdirAll(bk.cfg.StorageDirectoryPath, 0755)
+		if mkdirErr != nil {
+			return fmt.Errorf("initFileSystem: %v", mkdirErr)
+		}
+		bk.logger.Infof("initFileSystem: storage directory path %v does not exists. Automatically created.",
 			bk.cfg.StorageDirectoryPath)
 	}
 
@@ -58,8 +62,6 @@ func (bk *Bookie) initFileSystem() error {
 		return fmt.Errorf("initFileSystem: %w", err)
 	}
 	bk.storageFree = bk.cfg.StorageMaxSize - bk.storageUsed
-
-	bk.openSegmentFiles = make(map[string]*os.File)
 
 	return nil
 }

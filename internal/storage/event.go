@@ -4,6 +4,7 @@ import (
 	"github.com/go-zookeeper/zk"
 	"net/rpc"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -43,70 +44,127 @@ func (bk *Bookie) handleEvent(event *Event) {
 }
 
 type eventFollowerUpdateArgs struct {
-	segmentName        string
-	beforeNumFollowers int
+	segmentName      string   // The name of the involved segment.
+	beforeFollowers  []string // ZNode names. The followers before this event happens.
+	currentFollowers []string // ZNode names. The followers after this event happens.
+}
+
+func (bk *Bookie) sendSegmentToNewFollowers(segmentName string, newFollowers []string,
+	segmentBookies map[string]*segmentBookieZNode) {
+	bk.logger.Infof("sendSegmentToNewFollowers: segmentName=%v, newFollowers=%v", segmentName, newFollowers)
+	wg := sync.WaitGroup{}
+	for _, newFollower := range newFollowers {
+		bookie := segmentBookies[newFollower]
+		wg.Add(1)
+		go func(bookie *segmentBookieZNode) {
+			data, _, _ := bk.readSegmentOnFS(segmentName, bookie.offset, bk.cfg.SegmentMaxSize)
+			appendBackupSegmentArgs := &AppendBackupSegmentArgs{segmentName, data, bookie.offset}
+			rpcErr := bk.sendRPC(bookie.address, "Bookie.AppendBackupSegment", &appendBackupSegmentArgs,
+				nil, 1*time.Second)
+			if rpcErr != nil {
+				bk.logger.Errorf("sendSegmentToNewFollowers: AppendBackupSegment RPC failed: %v,follower %v", rpcErr, bookie.address)
+			}
+			wg.Done()
+		}(bookie)
+	}
+	wg.Wait()
+
+	bk.logger.Infof("handleEventFollowerUpdate met a new follower comes into the bookie ensemble.")
 }
 
 // handleEventFollowerUpdate acts for a follower coming or leaving the segment bookie group
 // which is leaded by this bookie.
 func (bk *Bookie) handleEventFollowerUpdate(args *eventFollowerUpdateArgs) {
-	// Give the failed bookie some time to come back as needed.
-	time.Sleep(bk.cfg.PermissibleDowntime)
+	// Watch this segment again.
+	bk.watchSegmentPeersBG(filepath.Join(zkSegmentsPath, args.segmentName))
 
-	// Get enough data for selecting a backup follower.
+	// Get peers state on ZK.
 	segmentPath := filepath.Join(zkSegmentsPath, args.segmentName)
 	segmentBookies, err := bk.getSegmentBookiesOnZK(segmentPath)
+
 	if err != nil {
 		bk.logger.Errorf("handleEventFollowerUpdate, error %v", err)
 		return
 	}
+	bk.logger.Infof("handleEventFollowerUpdate, segmentBookies %v(len=%v) ", segmentBookies, len(segmentBookies))
 
-	if args.beforeNumFollowers < len(segmentBookies) {
-		// We do nothing when a follower joins.
-		bk.logger.Infof("handleEventFollowerUpdate met a new follower comes into the bookie ensemble.")
-		return
-	}
+	if len(args.currentFollowers) < len(args.beforeFollowers) {
+		// Follower crash event.
+		if len(segmentBookies) == len(args.beforeFollowers)-1 {
+			// The crashed followers come back.
+			crashedFollowers := make([]string, 0)
+			currentFollowersMap := make(map[string]bool)
+			for _, follower := range args.currentFollowers {
+				currentFollowersMap[follower] = true
+			}
+			for follower := range segmentBookies {
+				if currentFollowersMap[follower] == false {
+					crashedFollowers = append(crashedFollowers, follower)
+				}
+			}
+			bk.logger.Infof("handleEventFollowerUpdate: crashed followers come back, they are %+v", crashedFollowers)
+			// Sync segment with them.
+			bk.sendSegmentToNewFollowers(args.segmentName, crashedFollowers, segmentBookies)
+		} else {
+			peerStates, err2 := bk.getPeersOnZK()
+			if err2 != nil {
+				bk.logger.Errorf("handleEventFollowerUpdate, error %v", err2)
+				return
+			}
+			bk.logger.Infof("handleEventFollowerUpdate, %v peers are alive.", len(peerStates))
+			// Select follower now.
+			follower, err2 := bk.selectSegmentFollower(peerStates, segmentBookies, 1, bk.cfg.SegmentMaxSize)
+			if len(follower) == 0 {
+				bk.logger.Warnf("handleEventFollowerUpdate cannot find enough bookies as followers")
+				return
+			}
+			if err2 != nil {
+				bk.logger.Errorf("handleEventFollowerUpdate, error %v", err2.Error())
+				return
+			}
+			bk.logger.Infof("handleEventFollowerUpdate followers selected as %v", follower)
 
-	peerStates, err := bk.getPeersOnZK()
-	if err != nil {
-		bk.logger.Errorf("handleEventFollowerUpdate, error %v", err)
-		return
-	}
-
-	// Select follower now.
-	follower, err := bk.selectSegmentFollower(peerStates, segmentBookies, 1, bk.cfg.SegmentMaxSize)
-	if len(follower) == 0 {
-		bk.logger.Warnf("handleEventFollowerUpdate cannot find enough bookies as followers")
-		return
-	}
-	if err != nil {
-		bk.logger.Errorf("handleEventFollowerUpdate, error %v", err.Error())
-		return
-	}
-	bk.logger.Infof("handleEventFollowerUpdate followers selected as %v", follower)
-
-	// Notify the follower.
-	createBackupSegmentArgs := &CreateBackupSegmentArgs{SegmentName: args.segmentName}
-	client, rpcErr := rpc.DialHTTP("tcp", follower[0])
-	if rpcErr != nil {
-		bk.logger.Errorf("handleEventFollowerUpdate rpc dial failed, error %v", rpcErr.Error())
-	} else {
-		doneCh := make(chan *rpc.Call, 1)
-		call := client.Go("Bookie.CreateBackupSegment", &createBackupSegmentArgs, nil, doneCh)
-		select {
-		case <-time.After(bk.cfg.DefaultPeerCommunicationTimeout):
-			bk.logger.Warnf("handleEventFollowerUpdate: time out in sending CreateBackupSegment to follower %v, call error %v",
-				follower[0], call.Error)
-		case doneCall := <-doneCh:
-			err = doneCall.Error
-			if err != nil {
-				bk.logger.Errorf("Bookie.CreatePrimarySegment: error in calling CreateBackupSegment, err=%v,follower=%v", err, follower)
+			// Notify the follower.
+			createBackupSegmentArgs := &CreateBackupSegmentArgs{SegmentName: args.segmentName}
+			client, rpcErr := rpc.DialHTTP("tcp", follower[0])
+			if rpcErr != nil {
+				bk.logger.Errorf("handleEventFollowerUpdate rpc dial failed, error %v", rpcErr.Error())
+			} else {
+				doneCh := make(chan *rpc.Call, 1)
+				call := client.Go("Bookie.CreateBackupSegment", &createBackupSegmentArgs, nil, doneCh)
+				select {
+				case <-time.After(bk.cfg.DefaultPeerCommunicationTimeout):
+					bk.logger.Warnf("handleEventFollowerUpdate: time out in sending CreateBackupSegment to follower %v, call error %v",
+						follower[0], call.Error)
+				case doneCall := <-doneCh:
+					err2 = doneCall.Error
+					if err2 != nil {
+						bk.logger.Errorf("Bookie.CreatePrimarySegment: error in calling CreateBackupSegment, err2=%v,follower=%v", err2, follower)
+					}
+				}
 			}
 		}
+	} else if len(args.currentFollowers) > len(args.beforeFollowers) {
+		// Follower join event.
+		// Find the new followers.
+		newFollowers := make([]string, 0)
+		beforeFollowers := make(map[string]bool)
+		for _, follower := range args.beforeFollowers {
+			beforeFollowers[follower] = true
+		}
+		for follower := range segmentBookies {
+			if _, ok := beforeFollowers[follower]; !ok {
+				newFollowers = append(newFollowers, follower)
+			}
+		}
+		bk.logger.Infof("handleEventFollowerUpdate new followers join, they are %+v", newFollowers)
+		// Sync segment with them.
+		bk.sendSegmentToNewFollowers(args.segmentName, newFollowers, segmentBookies)
+	} else {
+		// TODO(Hoo@Future): not considered.
+		bk.logger.Warnf("Some follower crashed but comes back.")
 	}
 
-	// Watch this segment again.
-	bk.watchSegmentPeersBG(segmentPath)
 }
 
 type eventLeaderCrashArgs struct {
@@ -146,13 +204,20 @@ func (bk *Bookie) handleEventLeaderCrash(args *eventLeaderCrashArgs) {
 		}
 		bk.watchSegmentPeersBG(segmentZNodePath)
 		// leader crashes means that after this bookie becomes the leader, there misses one follower.
-		event := &Event{
-			Description: "follower crash",
-			eType:       eventFollowerUpdate,
-			args:        eventFollowerUpdateArgs{filepath.Base(segmentZNodePath), len(segmentBookies)},
-		}
-		bk.eventCh <- event
-		bk.logger.Infof("Bookie send follower crash event.")
+		go func() {
+			followers := make([]string, 0)
+			for follower := range segmentBookies {
+				followers = append(followers, follower)
+			}
+			event := &Event{
+				Description: "follower crash",
+				eType:       eventFollowerUpdate,
+				args:        eventFollowerUpdateArgs{filepath.Base(segmentZNodePath), followers, followers},
+			}
+			time.Sleep(bk.cfg.PermissibleDowntime)
+			bk.eventCh <- event
+			bk.logger.Infof("Bookie send follower crash event.")
+		}()
 	} else {
 		// This bookie is still the follower.
 		bk.watchSegmentMetadataBG(segmentZNodePath)

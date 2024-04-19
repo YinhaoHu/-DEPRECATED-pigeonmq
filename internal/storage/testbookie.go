@@ -10,6 +10,7 @@ import (
 	"pigeonmq/internal/testutil"
 	"pigeonmq/internal/util"
 	"testing"
+	"time"
 )
 
 type TestBookieLocation int32
@@ -27,20 +28,15 @@ type TestBookie struct {
 }
 
 // NewTestBookie generates an instance for testing bookie.
-func NewTestBookie(configPath string, location TestBookieLocation) *TestBookie {
-	cfg, err := NewConfig(configPath)
-	if err != nil {
-		panic(err)
-	}
-
+func NewTestBookie(cfg *Config, location TestBookieLocation) *TestBookie {
 	bk := new(Bookie)
-	err = error(nil)
+	err := error(nil)
 
 	bk.cfg = cfg
 	bk.address = fmt.Sprintf("%s:%d", bk.cfg.IPAddress, bk.cfg.Port)
 
 	// initialize the log.
-	logFileBaseName := fmt.Sprintf("bookie-test-%v-%v.log", cfg.Port, os.Getpid())
+	logFileBaseName := fmt.Sprintf("bookie-test-%v-%v-%v.log", cfg.Port, os.Getpid(), time.Now().UnixNano())
 	logFilePath := filepath.Join(cfg.LogFilePath, logFileBaseName)
 	logFile, err := os.OpenFile(logFilePath, os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
@@ -48,9 +44,12 @@ func NewTestBookie(configPath string, location TestBookieLocation) *TestBookie {
 	}
 	bk.logger = util.NewLogger(logFile, util.DebugLevel)
 
-	// initialize the event handlers.
+	// allocate memory for fields
 	bk.eventCh = make(chan *Event, maxEventBackLog)
+	bk.segments = make(map[string]*segment)
+	bk.openSegmentFiles = make(map[string]*os.File)
 
+	bk.recovery()
 	// initialize the file system related fields of this bookie.
 	err = bk.initFileSystem()
 	if err != nil {
@@ -79,53 +78,57 @@ func NewTestBookie(configPath string, location TestBookieLocation) *TestBookie {
 	return tb
 }
 
-// testBookieCluster represents a test cluster of bookies used for testing purposes.
-type testBookieCluster struct {
-	bookieNames []string   // Names of the bookies in the cluster.
-	t           *testing.T // Reference to the testing.T instance for reporting errors.
+type TestBookieCluster struct {
+	Bookies []*TestBookie
+	Testing *testing.T
 }
 
-// newTestBookieCluster creates a new instance of testBookieCluster with the given bookie names.
-func newTestBookieCluster(t *testing.T, names ...string) *testBookieCluster {
-	c := &testBookieCluster{
-		bookieNames: names,
-		t:           t,
-	}
-	return c
-}
-
-// batchProcess runs a batch process on the bookies in the cluster with the given option.
-func (c *testBookieCluster) batchProcess(option string) {
-	// Iterate over the bookie names and run the process on each bookie.
-	for _, name := range c.bookieNames {
-		c.runBookieSh(name, option)
+func NewTestBookieCluster(t *testing.T) *TestBookieCluster {
+	return &TestBookieCluster{
+		Bookies: make([]*TestBookie, 0),
+		Testing: t,
 	}
 }
 
-func (c *testBookieCluster) runBookieSh(name string, option string) {
+func (c *TestBookieCluster) runBookieSh(name string, option string) {
 	bookieShPath, err := filepath.Abs("../../cmd/pigeonmq-bookie/bookie.sh")
-	testutil.CheckErrorAndFatalAsNeeded(err, c.t)
+	testutil.CheckErrorAndFatalAsNeeded(err, c.Testing)
 
 	err = exec.Command(bookieShPath, name, option).Run()
-	testutil.CheckErrorAndFatalAsNeeded(err, c.t)
+	testutil.CheckErrorAndFatalAsNeeded(err, c.Testing)
 }
 
-func (c *testBookieCluster) setupOne(name string) {
-	c.runBookieSh(name, "start")
+// Join adds a bookie with cfgTemplate and port into the cluster without starting by default.
+// port should be this format: 1900*, e.g: 19001, 19002.
+func (c *TestBookieCluster) Join(cfgTemplate *Config, port int) {
+	cfg := *cfgTemplate
+	cfg.Port = port
+	storageDirPwd, storageDir := filepath.Split(cfgTemplate.StorageDirectoryPath)
+	storageDir = fmt.Sprintf("storage%v", port%19000)
+	cfg.StorageDirectoryPath = filepath.Join(storageDirPwd, storageDir)
+	newTestBookie := NewTestBookie(&cfg, TestBookieLocationCluster)
+	c.Bookies = append(c.Bookies, newTestBookie)
 }
 
-// setupAll starts all bookies in the cluster.
-func (c *testBookieCluster) setupAll() {
-	c.batchProcess("start")
+func (c *TestBookieCluster) TearDownAll() {
+	for _, tb := range c.Bookies {
+		tb.bk.Shutdown()
+	}
 }
 
-func (c *testBookieCluster) tearDownOne(name string) {
-	c.runBookieSh(name, "stop")
+func (c *TestBookieCluster) StartAll() {
+	for _, tb := range c.Bookies {
+		go tb.bk.Run()
+	}
 }
 
-// teardownAll stops all bookies in the cluster.
-func (c *testBookieCluster) teardownAll() {
-	c.batchProcess("close")
+func (c *TestBookieCluster) TearDownOne(id int) {
+	c.Bookies[id].bk.Shutdown()
+}
+
+func (c *TestBookieCluster) StartOne(id int) {
+	c.Bookies[id] = NewTestBookie(c.Bookies[id].cfg, c.Bookies[id].location)
+	go c.Bookies[id].bk.Run()
 }
 
 // ZKDeleteAll implements the `delete-all` command in zk client.

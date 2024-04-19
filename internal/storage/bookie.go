@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"pigeonmq/internal/util"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -61,6 +62,7 @@ type Bookie struct {
 
 	eventCh chan *Event // Channel for receiving events.
 
+	rpcServer   *rpc.Server
 	rpcListener net.Listener // RPC listener.
 	rpcClients  struct {
 		clients map[string]*rpc.Client // RPC network connections to other bookies. Mapping: address->rpc client
@@ -100,7 +102,7 @@ func NewBookie(cfg *Config) (*Bookie, error) {
 	// initialize the log.
 	logFileBaseName := fmt.Sprintf("bookie-%v-%v.log", cfg.Port, os.Getpid())
 	logFilePath := filepath.Join(cfg.LogFilePath, logFileBaseName)
-	logFile, err := os.OpenFile(logFilePath, os.O_RDWR|os.O_CREATE, 0666)
+	logFile, err := os.Create(logFilePath)
 
 	if err != nil {
 		return nil, err
@@ -108,10 +110,10 @@ func NewBookie(cfg *Config) (*Bookie, error) {
 	bk.logger = util.NewLogger(logFile, util.DebugLevel)
 	bk.logger.Infof("Bookie begins to initilize.")
 
-	// initialize the event handlers.
+	// allocate memory for fields
 	bk.eventCh = make(chan *Event, maxEventBackLog)
-
 	bk.segments = make(map[string]*segment)
+	bk.openSegmentFiles = make(map[string]*os.File)
 
 	bk.recovery()
 	// initialize the file system related fields of this bookie.
@@ -149,40 +151,38 @@ func newSegment(role segmentRole, maxOffset int64, bookieZNodePath string, segme
 	return sg
 }
 
-func (bk *Bookie) shutDown() error {
-	if bk.GetState() == StateStopped {
-		return fmt.Errorf("already stopped")
-	}
-
-	bk.setState(StateStopped)
-
-	bk.zkConn.Close()
-
-	err := bk.closeRPC()
-	if err != nil {
-		return err
-	}
-	return nil
+// RPCPath returns the rpc path of a specific bookie in address.
+func RPCPath(address string) string {
+	address = strings.Replace(address, ".", "_", -1)
+	address = strings.Replace(address, ":", "_", -1)
+	return fmt.Sprintf("/_go_rpc_%v", address)
 }
 
-// ShutDown cleans the state of bookie.
-func (bk *Bookie) ShutDown() {
+// Shutdown cleans the state of bookie.
+func (bk *Bookie) Shutdown() {
 	bk.logger.Infof("Bookie [%v] shutting down...", os.Getpid())
-	closeErr := bk.shutDown()
+	closeErr := error(nil)
+	if bk.GetState() == StateStopped {
+		closeErr = fmt.Errorf("already stopped")
+	} else {
+		bk.setState(StateStopped)
+		bk.zkConn.Close()
+		closeErr = bk.closeRPC()
+	}
 	if closeErr != nil {
 		bk.logger.Errorf("Bookie [%v] shut down with error : %v", os.Getpid(), closeErr)
 	} else {
 		bk.logger.Infof("Bookie [%v] shut down successfully", os.Getpid())
 	}
-
 }
 
+// Run runs the bookie routine. Typically, you should invoke this in a go statement.
 func (bk *Bookie) Run() {
 	defer func() {
 		if err := recover(); err != nil {
 			bk.logger.Errorf("Bookie panic, %v", err)
 		}
-		bk.ShutDown()
+		bk.Shutdown()
 	}()
 	bk.logger.Infof("Bookie [%v] starts running in main loop...", os.Getpid())
 	bk.logger.Infof("With config:\n %+v", bk.cfg.toJsonString())
@@ -200,23 +200,30 @@ func (bk *Bookie) Run() {
 			}
 			bk.handleEvent(event)
 		case <-sigCh:
-			bk.ShutDown()
+			bk.Shutdown()
 			return
 		}
 	}
 }
 
 func (bk *Bookie) recovery() {
+	bk.logger.Infof("start recovery process")
 	currentTime := time.Now()
 	err := filepath.WalkDir(bk.cfg.StorageDirectoryPath, func(path string, d fs.DirEntry, err error) error {
 		info, err := d.Info()
 		if err != nil {
 			return err
 		}
+		if info.IsDir() {
+			return nil
+		}
 		elapsedTime := currentTime.Sub(info.ModTime())
+		bk.logger.Infof("recovery: meet segment %v. ElapsedTime: %v", filepath.Base(path), elapsedTime)
 		if elapsedTime < bk.cfg.PermissibleDowntime {
 			// This segment is reserved to be request data from zk.
-			bk.segments[filepath.Base(path)] = nil
+			hdr := bk.getSegmentHeaderOnFS(filepath.Base(path))
+			bk.logger.Infof("recovery: begin to be responsible for segment %v", filepath.Base(path))
+			bk.segments[filepath.Base(path)] = newSegment(segmentRoleBackup, hdr.payloadSize+segmentHeaderSize, "", "")
 			bk.storageUsed += bk.cfg.SegmentMaxSize
 			bk.storageFree -= bk.cfg.SegmentMaxSize
 		}

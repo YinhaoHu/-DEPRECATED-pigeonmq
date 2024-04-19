@@ -9,6 +9,7 @@ import (
 	"github.com/go-zookeeper/zk"
 	"path/filepath"
 	"pigeonmq/internal/util"
+	"time"
 	"unsafe"
 )
 
@@ -67,15 +68,19 @@ func (bk *Bookie) initZK() error {
 	// Come back to the segments this bookie is responsible for.
 	// FIXME: there is a chance that when the leader selected another bookie after PermissibleDowntime,
 	//  but this bookie still comes back. This is currently allowed because of the small possibility.
+	//  What if all of the bookies in a segment crash? How could leader be elected? (Future TO-DO)
 	for segmentName, _ := range bk.segments {
+		bk.logger.Infof("initZK: create segment %v hinted by recovery", segmentName)
 		segmentZNodePath := filepath.Join(zkSegmentsPath, segmentName)
-		bookieZNodePath, err := bk.createSegmentBookieOnZK(bk.address, segmentZNodePath)
+		bookieZNodePath, recoveryErr := bk.createSegmentBookieOnZK(bk.address, segmentZNodePath,
+			bk.segments[segmentName].bound.Load())
 
-		if err != nil {
-			return err
+		if recoveryErr != nil {
+			bk.logger.Errorf("initZK: create segment %v hinted by recovery err %v", segmentName, recoveryErr)
+			return recoveryErr
 		}
-		segmentHdr := bk.getSegmentHeaderOnFS(segmentName)
-		bk.segments[segmentName] = newSegment(segmentRoleBackup, segmentHdr.payloadSize+segmentHeaderSize, bookieZNodePath, segmentZNodePath)
+		bk.segments[segmentName].bookieZNodePath = bookieZNodePath
+		bk.segments[segmentName].znodePath = segmentZNodePath
 	}
 
 	return err
@@ -94,7 +99,7 @@ func (bk *Bookie) createSegmentOnZK(name string) (segmentZNodePath string, booki
 
 	// Create initial leader bookie znode under this segment.
 	address := fmt.Sprintf("%v:%v", bk.cfg.IPAddress, bk.cfg.Port)
-	bookieZNodePath, err = bk.createSegmentBookieOnZK(address, segmentZNodePath)
+	bookieZNodePath, err = bk.createSegmentBookieOnZK(address, segmentZNodePath, segmentHeaderSize)
 	if err != nil {
 		return "", "", fmt.Errorf("createSegmentOnZK:create initial leader bookie znode %w", err)
 	}
@@ -111,9 +116,9 @@ func (bk *Bookie) createSegmentOnZK(name string) (segmentZNodePath string, booki
 }
 
 // createSegmentBookieOnZK creates a bookie znode under a segment path.
-func (bk *Bookie) createSegmentBookieOnZK(address string, segmentZNodePath string) (bookieZNodePath string, err error) {
+func (bk *Bookie) createSegmentBookieOnZK(address string, segmentZNodePath string, offset int64) (bookieZNodePath string, err error) {
 	bookieZNodePath = filepath.Join(segmentZNodePath, zkSegmentBookieNamePrefix)
-	bookieZNode := segmentBookieZNode{address, segmentHeaderSize}
+	bookieZNode := segmentBookieZNode{address, offset}
 
 	// Ephemeral flag is used so that a machine crash could be detected,
 	// sequence flag is used so that if more than one bookie has the same highest offset,
@@ -172,15 +177,6 @@ func (bk *Bookie) getPeersOnZK() (peers []*BookieZKState, err error) {
 func (bk *Bookie) watchSegmentPeersBG(segmentPath string) {
 	// Watch the segment children.
 	children, _, eventCh, err := bk.zkConn.ChildrenW(segmentPath)
-	sendFollowerCrashEvent := func() {
-		event := &Event{
-			Description: "follower crash",
-			eType:       eventFollowerUpdate,
-			args:        eventFollowerUpdateArgs{filepath.Base(segmentPath), len(children) - 1},
-		}
-		bk.eventCh <- event
-		bk.logger.Infof("Bookie send follower crash event %v", *event)
-	}
 	if err != nil {
 		bk.logger.Errorf("watchSegmentPeersBG meet error %v", err)
 		return
@@ -189,9 +185,25 @@ func (bk *Bookie) watchSegmentPeersBG(segmentPath string) {
 	// Send to main loop.
 	go func() {
 		event := <-eventCh
+		currentFollowers, _, err2 := bk.zkConn.Children(event.Path)
+		if err2 != nil {
+			bk.logger.Errorf("watchSegmentPeersBG meet error %v", err2)
+			return
+		}
 		bk.logger.Infof("watchSegmentPeersBG meet event %v", event)
 		if event.Type == zk.EventNodeChildrenChanged {
-			sendFollowerCrashEvent()
+			evt := &Event{
+				Description: "follower updates",
+				eType:       eventFollowerUpdate,
+				args: eventFollowerUpdateArgs{filepath.Base(segmentPath), children,
+					currentFollowers},
+			}
+			if len(currentFollowers) < len(children) {
+				// If one follower crashed, we delay the event signal.
+				time.Sleep(bk.cfg.PermissibleDowntime)
+			}
+			bk.eventCh <- evt
+			bk.logger.Infof("Bookie send follower update event %v", *evt)
 			return
 		}
 	}()
