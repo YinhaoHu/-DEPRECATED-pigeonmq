@@ -2,3 +2,4 @@
 /cmd/pigeonmq-bookie/configs/
 /.idea
 /cmd/pigeonmq-bookie/storages
+/logs/*.log
