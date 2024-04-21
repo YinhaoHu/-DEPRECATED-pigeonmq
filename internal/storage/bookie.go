@@ -38,6 +38,7 @@ type segment struct {
 	bound           atomic.Int64 // Bound offset in the segment before which the data can be read with lock free.
 	znodePath       string       // ZNode path of this segment.
 	bookieZNodePath string       // ZNode path of this bookie for this segment.
+	state           segmentState // Open or close
 }
 
 // Bookie represents storage layer server Bookie concept.
@@ -148,6 +149,7 @@ func newSegment(role segmentRole, maxOffset int64, bookieZNodePath string, segme
 	sg.bound.Store(maxOffset)
 	sg.znodePath = segmentZNodePath
 	sg.bookieZNodePath = bookieZNodePath
+	sg.state = segmentStateOpen
 	return sg
 }
 
@@ -208,6 +210,18 @@ func (bk *Bookie) Run() {
 
 func (bk *Bookie) recovery() {
 	bk.logger.Infof("start recovery process")
+
+	// Check whether the directory path exists.
+	if _, err := os.Stat(bk.cfg.StorageDirectoryPath); os.IsNotExist(err) {
+		mkdirErr := os.MkdirAll(bk.cfg.StorageDirectoryPath, 0755)
+		if mkdirErr != nil {
+			bk.logger.Errorf("initFileSystem: %v", mkdirErr)
+			panic(mkdirErr)
+		}
+		bk.logger.Infof("initFileSystem: storage directory path %v does not exists. Automatically created.",
+			bk.cfg.StorageDirectoryPath)
+	}
+
 	currentTime := time.Now()
 	err := filepath.WalkDir(bk.cfg.StorageDirectoryPath, func(path string, d fs.DirEntry, err error) error {
 		info, err := d.Info()

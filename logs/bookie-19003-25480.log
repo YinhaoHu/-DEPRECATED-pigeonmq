@@ -1,0 +1,63 @@
+2024-04-21 16:52:25 [INFO] Bookie begins to initilize.
+2024-04-21 16:52:25 [INFO] start recovery process
+2024-04-21 16:52:25 [INFO] recovery: meet segment t-seg. ElapsedTime: 20.233981776s
+2024-04-21 16:52:25 [INFO] Bookie initialize file system successfully.
+2024-04-21 16:52:25 [INFO] ZooKeeper connected to 127.0.0.1:18001
+2024-04-21 16:52:25 [INFO] ZooKeeper authenticated: id=72057594512081034, timeout=4000
+2024-04-21 16:52:25 [INFO] ZooKeeper re-submitting `0` credentials after reconnect
+2024-04-21 16:52:25 [INFO] Bookie initialize zookeeper successfully.
+2024-04-21 16:52:25 [INFO] RPC is handled in path: /_go_rpc_127_0_0_1_19003 and debug path: /debug/gorpc_127.0.0.1:19003
+2024-04-21 16:52:25 [INFO] Bookie initialize RPC server successfully.
+2024-04-21 16:52:25 [INFO] Bookie state is set to Running
+2024-04-21 16:52:25 [INFO] Bookie [25480] starts running in main loop...
+2024-04-21 16:52:25 [INFO] With config:
+ {
+  "ReplicateNumber": 3,
+  "MinimumReplicaNumber": 1,
+  "SegmentMaxSize": 33554432,
+  "StorageMaxSize": 268435456,
+  "StorageDirectoryPath": "/home/hoo/Filebase/project/pigeonmq/cmd/pigeonmq-bookie/storages/storage3",
+  "LogFilePath": "/home/hoo/Filebase/project/pigeonmq/logs",
+  "PermissibleDowntime": 3000000000,
+  "ZooKeeperClusterAddresses": [
+    "127.0.0.1:18001"
+  ],
+  "ZooKeeperConnectionTimeout": 3000000000,
+  "DefaultPeerCommunicationTimeout": 3000000000,
+  "IPAddress": "127.0.0.1",
+  "Port": 19003,
+  "CronTimer": 10000000000,
+  "RetentionHours": 604800000000000
+}
+2024-04-21 16:52:25 [INFO] Bookie received RPC CreateBackupSegment, args=&{t-seg}
+2024-04-21 16:52:25 [INFO] Bookie handled RPC CreateBackupSegment: error=<nil>
+2024-04-21 16:52:25 [INFO] Bookie [25480] shutting down...
+2024-04-21 16:52:25 [INFO] Bookie state is set to Stopped
+2024-04-21 16:52:25 [INFO] ZooKeeper recv loop terminated: EOF
+2024-04-21 16:52:25 [INFO] ZooKeeper send loop terminated: <nil>
+2024-04-21 16:52:25 [WARN] watchSegmentMetadataBG meet unexpected watched zk event,event={EventNotWatching StateDisconnected /segments/t-seg/metadata zk: zookeeper is closing }
+2024-04-21 16:52:25 [INFO] Bookie [25480] shut down successfully
+2024-04-21 16:52:25 [INFO] Bookie [25480] shutting down...
+2024-04-21 16:52:25 [ERROR] Bookie [25480] shut down with error : already stopped
+2024-04-21 16:52:25 [INFO] Bookie [25480] starts running in main loop...
+2024-04-21 16:52:25 [INFO] With config:
+ {
+  "ReplicateNumber": 3,
+  "MinimumReplicaNumber": 1,
+  "SegmentMaxSize": 33554432,
+  "StorageMaxSize": 268435456,
+  "StorageDirectoryPath": "/home/hoo/Filebase/project/pigeonmq/cmd/pigeonmq-bookie/storages/storage3",
+  "LogFilePath": "/home/hoo/Filebase/project/pigeonmq/logs",
+  "PermissibleDowntime": 3000000000,
+  "ZooKeeperClusterAddresses": [
+    "127.0.0.1:18001"
+  ],
+  "ZooKeeperConnectionTimeout": 3000000000,
+  "DefaultPeerCommunicationTimeout": 3000000000,
+  "IPAddress": "127.0.0.1",
+  "Port": 19003,
+  "CronTimer": 10000000000,
+  "RetentionHours": 604800000000000
+}
+2024-04-21 16:52:25 [INFO] Bookie [25480] shutting down...
+2024-04-21 16:52:25 [ERROR] Bookie [25480] shut down with error : already stopped

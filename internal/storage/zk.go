@@ -76,6 +76,13 @@ func (bk *Bookie) initZK() error {
 			bk.segments[segmentName].bound.Load())
 
 		if recoveryErr != nil {
+			if errors.Is(recoveryErr, zk.ErrNoNode) {
+				bk.logger.Warnf("initZK: create segment %v hinted by recovery, segment znode does not exist. "+
+					"All bookies for this segment crahsed?",
+					segmentName)
+				delete(bk.segments, segmentName)
+				continue
+			}
 			bk.logger.Errorf("initZK: create segment %v hinted by recovery err %v", segmentName, recoveryErr)
 			return recoveryErr
 		}
@@ -87,14 +94,33 @@ func (bk *Bookie) initZK() error {
 }
 
 // createSegmentOnZK creates a segment znode on zk for segment leader.
-func (bk *Bookie) createSegmentOnZK(name string) (segmentZNodePath string, bookieZNodePath string, err error) {
+//
+// Note: If err is zk.ErrNodeExists, check whether this happens after a leader crash or follower crash by
+// checking whether the bookieZNodePath is empty or not.
+func (bk *Bookie) createSegmentOnZK(segmentName string) (segmentZNodePath string, bookieZNodePath string, err error) {
 	// Create segment znode.
-	segmentZNodePath = filepath.Join(zkSegmentsPath, name)
+	segmentZNodePath = filepath.Join(zkSegmentsPath, segmentName)
 	_, err = bk.zkConn.Create(segmentZNodePath, nil, 0, zk.WorldACL(zk.PermAll))
-	// ErrNodeExists is allowed because if the previous leader created this but immediately died,
-	// the client resend the createPrimarySegmentRPC request.
-	if err != nil && errors.Is(err, zk.ErrNodeExists) {
-		return "", "", fmt.Errorf("createSegmentOnZK:create segment znode %w", err)
+
+	if err != nil {
+		if !errors.Is(err, zk.ErrNodeExists) {
+			return "", "", fmt.Errorf("createSegmentOnZK:create segment znode %w", err)
+		}
+		// ErrNodeExists is allowed because if the previous leader created this but error happens.
+		// the client resend the createPrimarySegmentRPC request.
+		// If the error is leader crash, bookieZNodePath is empty.
+		// If the error is follower crash, bookieZNodePath is valid.
+		segmentBookies, err2 := bk.getSegmentBookiesOnZK(segmentZNodePath)
+		if err2 != nil {
+			return "", "", fmt.Errorf("createSegmentOnZK:create segment bookies %w", err2)
+		}
+		bookieZNodePath = ""
+		for znodeName, bookie := range segmentBookies {
+			if bookie.address == bk.address {
+				bookieZNodePath = filepath.Join(zkSegmentsPath, znodeName)
+			}
+		}
+		return segmentZNodePath, bookieZNodePath, err
 	}
 
 	// Create initial leader bookie znode under this segment.

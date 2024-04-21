@@ -10,7 +10,7 @@
 
 # Check the input.
 if [ $# != 2 ];then
-  echo "Usage: $0 <bookie_name> <option: start/close>"
+  echo "Usage: $0 <bookie_name> <option: start/stop>"
   exit 1
 fi
 

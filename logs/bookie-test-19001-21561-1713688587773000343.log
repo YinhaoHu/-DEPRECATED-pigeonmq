@@ -1,0 +1,66 @@
+2024-04-21 16:36:27 [INFO] start recovery process
+2024-04-21 16:36:27 [INFO] recovery: meet segment t-seg. ElapsedTime: 7m56.922373398s
+2024-04-21 16:36:27 [INFO] ZooKeeper connected to 127.0.0.1:18001
+2024-04-21 16:36:27 [INFO] ZooKeeper authenticated: id=72057594512080978, timeout=4000
+2024-04-21 16:36:27 [INFO] ZooKeeper re-submitting `0` credentials after reconnect
+2024-04-21 16:36:27 [INFO] RPC is handled in path: /_go_rpc_127_0_0_1_19001 and debug path: /debug/gorpc_127.0.0.1:19001
+2024-04-21 16:36:27 [INFO] Bookie state is set to Running
+2024-04-21 16:36:30 [INFO] Bookie [21561] starts running in main loop...
+2024-04-21 16:36:30 [INFO] With config:
+ {
+  "ReplicateNumber": 3,
+  "MinimumReplicaNumber": 2,
+  "SegmentMaxSize": 33554432,
+  "StorageMaxSize": 268435456,
+  "StorageDirectoryPath": "/home/hoo/Filebase/project/pigeonmq/cmd/pigeonmq-bookie/storages/storage1",
+  "LogFilePath": "/home/hoo/Filebase/project/pigeonmq/logs",
+  "PermissibleDowntime": 3000000000,
+  "ZooKeeperClusterAddresses": [
+    "127.0.0.1:18001"
+  ],
+  "ZooKeeperConnectionTimeout": 3000000000,
+  "DefaultPeerCommunicationTimeout": 3000000000,
+  "IPAddress": "127.0.0.1",
+  "Port": 19001,
+  "CronTimer": 10000000000,
+  "RetentionHours": 604800000000000
+}
+2024-04-21 16:36:30 [INFO] Bookie got peers: [0xc00029e280 0xc000c18080 0xc00029e420]
+2024-04-21 16:36:30 [INFO] Bookie got peer: &{Address:127.0.0.1:19002 StorageFree:234881024 StorageUsed:33554432}
+2024-04-21 16:36:30 [INFO] Bookie got peer: &{Address:127.0.0.1:19001 StorageFree:234881024 StorageUsed:33554432}
+2024-04-21 16:36:30 [INFO] Bookie got peer: &{Address:127.0.0.1:19003 StorageFree:234881024 StorageUsed:33554432}
+2024-04-21 16:36:30 [INFO] sendRPC: begin to connect to 127.0.0.1:19003
+2024-04-21 16:36:30 [INFO] sendRPC: connected to 127.0.0.1:19003
+2024-04-21 16:36:30 [INFO] sendRPC: begin to connect to 127.0.0.1:19002
+2024-04-21 16:36:30 [INFO] sendRPC: connected to 127.0.0.1:19002
+2024-04-21 16:36:30 [INFO] Bookie created a new segment: t-seg
+2024-04-21 16:36:30 [INFO] Bookie handled RPC CreatePrimarySegment, error=<nil>
+2024-04-21 16:36:30 [INFO] Bookie received RPC AppendPrimarySegment, segment=t-seg, dataLen=1024, timeout=3s
+2024-04-21 16:36:30 [ERROR] AppendBackupSegment RPC failed: read tcp 127.0.0.1:38630->127.0.0.1:19003: read: connection reset by peer,follower 127.0.0.1:19003
+2024-04-21 16:36:30 [INFO] watchSegmentPeersBG meet event {EventNodeChildrenChanged Unknown /segments/t-seg <nil> }
+2024-04-21 16:36:30 [INFO] Bookie handled RPC AppendPrimarySegment, error=<nil>
+2024-04-21 16:36:30 [INFO] Bookie received RPC AppendPrimarySegment, segment=t-seg, dataLen=1024, timeout=3s
+2024-04-21 16:36:30 [INFO] Bookie handled RPC AppendPrimarySegment, error=<nil>
+2024-04-21 16:36:30 [INFO] Bookie received RPC AppendPrimarySegment, segment=t-seg, dataLen=1024, timeout=3s
+2024-04-21 16:36:30 [INFO] Bookie handled RPC AppendPrimarySegment, error=<nil>
+2024-04-21 16:36:30 [INFO] Bookie received RPC AppendPrimarySegment, segment=t-seg, dataLen=1024, timeout=3s
+2024-04-21 16:36:30 [INFO] Bookie handled RPC AppendPrimarySegment, error=<nil>
+2024-04-21 16:36:33 [INFO] Bookie send follower update event {follower updates 2 {t-seg [bookie0000000005 bookie0000000006 bookie0000000007] [bookie0000000005 bookie0000000007]}}
+2024-04-21 16:36:33 [INFO] handle event {Description:follower updates eType:2 args:{segmentName:t-seg beforeFollowers:[bookie0000000005 bookie0000000006 bookie0000000007] currentFollowers:[bookie0000000005 bookie0000000007]}}
+2024-04-21 16:36:33 [INFO] handleEventFollowerUpdate, segmentBookies map[bookie0000000005:0xc000124480 bookie0000000007:0xc0001244c8 bookie0000000009:0xc0002a23f0](len=3) 
+2024-04-21 16:36:33 [INFO] handleEventFollowerUpdate, 3 peers are alive.
+2024-04-21 16:36:33 [WARN] handleEventFollowerUpdate cannot find enough bookies as followers
+2024-04-21 16:36:35 [INFO] Bookie received RPC ReadSegment, args={t-seg 16 1024}
+2024-04-21 16:36:35 [INFO] Bookie handled RPC ReadSegment, error=<nil>
+2024-04-21 16:36:35 [INFO] Bookie received RPC ReadSegment, args={t-seg 1040 1024}
+2024-04-21 16:36:35 [INFO] Bookie handled RPC ReadSegment, error=<nil>
+2024-04-21 16:36:35 [INFO] Bookie received RPC ReadSegment, args={t-seg 2064 1024}
+2024-04-21 16:36:35 [INFO] Bookie handled RPC ReadSegment, error=<nil>
+2024-04-21 16:36:35 [INFO] Bookie received RPC ReadSegment, args={t-seg 3088 1024}
+2024-04-21 16:36:35 [INFO] Bookie handled RPC ReadSegment, error=<nil>
+2024-04-21 16:36:35 [INFO] Bookie [21561] shutting down...
+2024-04-21 16:36:35 [INFO] Bookie state is set to Stopped
+2024-04-21 16:36:35 [ERROR] watchSegmentPeersBG meet error zk: connection closed
+2024-04-21 16:36:35 [INFO] ZooKeeper recv loop terminated: EOF
+2024-04-21 16:36:35 [INFO] Bookie [21561] shut down successfully
+2024-04-21 16:36:35 [INFO] ZooKeeper send loop terminated: <nil>

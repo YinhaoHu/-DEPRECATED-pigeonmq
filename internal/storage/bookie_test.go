@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"github.com/go-zookeeper/zk"
 	"net/rpc"
@@ -132,9 +133,14 @@ func TestCluster(t *testing.T) {
 	// 		-> Fault-tolerance can be satisfied by out goal requirement?
 	//		-> Scalability and load balance is really correct?(Although it seems right theoretically)
 	//		-> Concurrency test: with distributed lock.
-	
+	//      -> Leader crash.
+	//		-> ZK crash.
+	//	 [other note]
+	//		-> Make sure the configuration consistency before testing.
+
 	tc := testutil.NewTestCase("Cluster", t)
 	tc.Begin()
+	tc.AcquireSudo()
 	defer tc.Done()
 	tc.CheckAssumption("test directory check", func() bool {
 		realPathCmd := exec.Command("pwd")
@@ -208,6 +214,9 @@ func TestCluster(t *testing.T) {
 	}
 	defer func() {
 		for _, cli := range bookies {
+			if cli == nil {
+				continue
+			}
 			err := cli.Close()
 			if err != nil {
 				fmt.Printf("rpcClient close error: %v", err)
@@ -228,18 +237,22 @@ func TestCluster(t *testing.T) {
 		testutil.CheckErrorAndFatalAsNeeded(err, t)
 	}
 
+	leaderBookieID := 0
+
 	// Create primary segment
+	tc.Report("Create primary segment.")
 	cpsArgs := &CreatePrimarySegmentArgs{
 		SegmentName: segName,
 		Timeout:     1 * time.Second,
 	}
-	rpcCallWithoutError(0, "CreatePrimarySegment", cpsArgs, nil)
+	rpcCallWithoutError(leaderBookieID, "CreatePrimarySegment", cpsArgs, nil)
 	segmentCreated = true
 
 	cluster.runBookieSh("bookie_3", "stop")
 	downTime := time.Now()
 
 	// Append to leader.
+	tc.Report("Append data to primary segment")
 	appendData := make([][]byte, 0)
 	appendEntriesBeginPos := make([]int64, 0)
 	numEntries := 4
@@ -253,7 +266,7 @@ func TestCluster(t *testing.T) {
 			Timeout:     3 * time.Second,
 		}
 		apReply := &AppendPrimarySegmentReply{}
-		rpcCallWithoutError(0, "AppendPrimarySegment", apArgs, apReply)
+		rpcCallWithoutError(leaderBookieID, "AppendPrimarySegment", apArgs, apReply)
 		appendEntriesBeginPos = append(appendEntriesBeginPos, apReply.BeginPos)
 	}
 
@@ -263,10 +276,11 @@ func TestCluster(t *testing.T) {
 		t.Errorf("append time is too long %v", downTime)
 	}
 	// Wait for the leader to append data to the new follower.
+	tc.Report("Wait for followers to follow up.")
 	time.Sleep(cfgTemplate.PermissibleDowntime + 1*time.Second)
 
 	// Read from ...
-	checkRead := func(bookieID int) {
+	checkRead := func(bookieID int, fromOpen bool) {
 		for i := 0; i < numEntries; i++ {
 			readArgs := &ReadSegmentArgs{
 				SegmentName: segName,
@@ -274,7 +288,19 @@ func TestCluster(t *testing.T) {
 				MaxSize:     int64(len(appendData[i])),
 			}
 			readReply := &ReadSegmentReply{}
-			rpcCallWithoutError(bookieID, "ReadSegment", readArgs, readReply)
+			err := bookies[bookieID].Call("Bookie.ReadSegment", readArgs, readReply)
+			if fromOpen && bookieID != leaderBookieID {
+				if errors.Is(err, ErrSegmentBadRead) {
+					t.Fatalf("No reading from an open backup segment is violated. err : %v. expected: %v",
+						err, ErrSegmentBadRead)
+				}
+				continue
+			}
+
+			if err != nil {
+				fmt.Printf("Bookie %v call error. Error is listed below.\n", bookieID)
+			}
+			testutil.CheckErrorAndFatalAsNeeded(err, t)
 			want := appendData[i]
 			get := readReply.Data
 			if len(get) != len(want) {
@@ -286,11 +312,29 @@ func TestCluster(t *testing.T) {
 		}
 	}
 
-	// Give followers sometime to follow up.
-	time.Sleep(1 * time.Second)
-
 	makeRPCClient(2, 19003)
+	// First, read open segment from leader and followers.
+	tc.Report("Read open segment from leader and followers.")
 	for bookieID := range bookies {
-		checkRead(bookieID)
+		checkRead(bookieID, true)
+	}
+
+	// Close the segment.
+	closeTimeout := 1500 * time.Millisecond
+	closePrimarySegmentArgs := &ClosePrimarySegmentArgs{
+		SegmentName: testutil.TestSegmentName,
+		Timeout:     closeTimeout,
+	}
+	tc.Report("Close segment")
+	rpcCallWithoutError(leaderBookieID, "ClosePrimarySegment", closePrimarySegmentArgs, nil)
+
+	// Await the followers to follow up.
+	tc.Report("Wait for followers to follow up.")
+	time.Sleep(closeTimeout)
+
+	tc.Report("Read closed segment from leader and followers.")
+	// Second, read close segment from all.
+	for bookieID := range bookies {
+		checkRead(bookieID, false)
 	}
 }

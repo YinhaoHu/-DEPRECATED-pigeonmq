@@ -11,14 +11,15 @@ import (
 
 const (
 	segmentHeaderSize = int64(unsafe.Sizeof(segmentHeader{})) // Size of segment header in byte.
-
-	segmentStateUnknown segmentState = -1
-	segmentStateOpen    segmentState = 0
-	segmentStateClose   segmentState = 1
 )
 
 // segmentState represents the state of a segment.
 type segmentState int16
+
+const (
+	segmentStateOpen segmentState = iota
+	segmentStateClose
+)
 
 // segmentHeader implements the representation of the header in the segment file.
 type segmentHeader struct {
@@ -45,16 +46,6 @@ func (sh *segmentHeader) toBytes() []byte {
 // initFileSystem initializes the file system part setting of bookie.
 func (bk *Bookie) initFileSystem() error {
 	err := error(nil)
-
-	// Check whether the directory path exists.
-	if _, err = os.Stat(bk.cfg.StorageDirectoryPath); os.IsNotExist(err) {
-		mkdirErr := os.MkdirAll(bk.cfg.StorageDirectoryPath, 0755)
-		if mkdirErr != nil {
-			return fmt.Errorf("initFileSystem: %v", mkdirErr)
-		}
-		bk.logger.Infof("initFileSystem: storage directory path %v does not exists. Automatically created.",
-			bk.cfg.StorageDirectoryPath)
-	}
 
 	// Set the resource usage.
 	bk.storageUsed, err = getDirectoryFilesSize(bk.cfg.StorageDirectoryPath)

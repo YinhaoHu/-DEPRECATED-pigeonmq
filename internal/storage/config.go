@@ -12,8 +12,8 @@ import (
 
 // Config represents the configuration information of a bookie.
 type Config struct {
-	ReplicateNumber      int // Number of replicas of a segment
-	MinimumReplicaNumber int // Minimum number of replicas of an append-available segment.
+	ReplicateNumber      int32 // Number of replicas of a segment
+	MinimumReplicaNumber int32 // Minimum number of replicas of an append-available segment.
 
 	SegmentMaxSize       int64  // Max size of a segment.
 	StorageMaxSize       int64  // Max size of storage can be used by the bookie in fs.
@@ -55,13 +55,13 @@ func NewConfig(filePath string) (*Config, error) {
 			if err != nil {
 				return nil, err
 			}
-			cfg.ReplicateNumber = replicateNumber
+			cfg.ReplicateNumber = int32(replicateNumber)
 		case "MinimumReplicaNumber":
 			minimumReplicaNumber, err := strconv.Atoi(v)
 			if err != nil {
 				return nil, err
 			}
-			cfg.MinimumReplicaNumber = minimumReplicaNumber
+			cfg.MinimumReplicaNumber = int32(minimumReplicaNumber)
 		case "SegmentMaxSize":
 			segmentMaxSize, err := strconv.ParseInt(v, 10, 64)
 			if err != nil {
@@ -85,11 +85,11 @@ func NewConfig(filePath string) (*Config, error) {
 			}
 			cfg.DefaultPeerCommunicationTimeout = time.Duration(timeoutSeconds) * time.Second
 		case "ZooKeeperConnectionTimeout":
-			timeoutSeconds, err := strconv.Atoi(v)
+			zkConnectionTimeout, err := time.ParseDuration(v)
 			if err != nil {
 				return nil, err
 			}
-			cfg.ZooKeeperConnectionTimeout = time.Duration(timeoutSeconds) * time.Second
+			cfg.ZooKeeperConnectionTimeout = zkConnectionTimeout
 		case "StorageDirectoryPath":
 			cfg.StorageDirectoryPath = v
 		case "IPAddress":

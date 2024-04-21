@@ -1,0 +1,38 @@
+2024-04-21 14:35:11 [INFO] start recovery process
+2024-04-21 14:35:11 [INFO] initFileSystem: storage directory path /home/hoo/Filebase/project/pigeonmq/cmd/pigeonmq-bookie/storages/storage1 does not exists. Automatically created.
+2024-04-21 14:35:11 [INFO] ZooKeeper connected to 127.0.0.1:18001
+2024-04-21 14:35:11 [INFO] ZooKeeper authenticated: id=72057594512080917, timeout=4000
+2024-04-21 14:35:11 [INFO] ZooKeeper re-submitting `0` credentials after reconnect
+2024-04-21 14:35:11 [INFO] RPC is handled in path: /_go_rpc_127_0_0_1_19001 and debug path: /debug/gorpc_127.0.0.1:19001
+2024-04-21 14:35:11 [INFO] Bookie state is set to Running
+2024-04-21 14:35:11 [INFO] Bookie [7807] starts running in main loop...
+2024-04-21 14:35:11 [INFO] With config:
+ {
+  "ReplicateNumber": 3,
+  "MinimumReplicaNumber": 2,
+  "SegmentMaxSize": 33554432,
+  "StorageMaxSize": 268435456,
+  "StorageDirectoryPath": "/home/hoo/Filebase/project/pigeonmq/cmd/pigeonmq-bookie/storages/storage1",
+  "LogFilePath": "/home/hoo/Filebase/project/pigeonmq/logs",
+  "PermissibleDowntime": 3000000000,
+  "ZooKeeperClusterAddresses": [
+    "127.0.0.1:18001"
+  ],
+  "ZooKeeperConnectionTimeout": 3000000000,
+  "DefaultPeerCommunicationTimeout": 3000000000,
+  "IPAddress": "127.0.0.1",
+  "Port": 19001,
+  "CronTimer": 10000000000,
+  "RetentionHours": 604800000000000
+}
+2024-04-21 14:35:11 [INFO] Bookie got peers: [0xc00028c2e0 0xc0001b0040]
+2024-04-21 14:35:11 [INFO] Bookie got peer: &{Address:127.0.0.1:19002 StorageFree:268435456 StorageUsed:0}
+2024-04-21 14:35:11 [INFO] Bookie got peer: &{Address:127.0.0.1:19001 StorageFree:268435456 StorageUsed:0}
+2024-04-21 14:35:11 [INFO] Bookie created a new segment: t-seg
+2024-04-21 14:35:11 [INFO] Bookie handled RPC CreatePrimarySegment, error=bookie: no enough followers
+2024-04-21 14:35:11 [INFO] Bookie [7807] shutting down...
+2024-04-21 14:35:11 [INFO] Bookie state is set to Stopped
+2024-04-21 14:35:11 [INFO] ZooKeeper recv loop terminated: EOF
+2024-04-21 14:35:11 [INFO] ZooKeeper send loop terminated: <nil>
+2024-04-21 14:35:11 [ERROR] watchSegmentPeersBG meet error zk: connection closed
+2024-04-21 14:35:11 [INFO] Bookie [7807] shut down successfully

@@ -1,0 +1,63 @@
+2024-04-21 16:43:20 [INFO] start recovery process
+2024-04-21 16:43:20 [INFO] recovery: meet segment t-seg. ElapsedTime: 17.239495065s
+2024-04-21 16:43:20 [INFO] ZooKeeper connected to 127.0.0.1:18001
+2024-04-21 16:43:20 [INFO] ZooKeeper authenticated: id=72057594512080992, timeout=4000
+2024-04-21 16:43:20 [INFO] ZooKeeper re-submitting `0` credentials after reconnect
+2024-04-21 16:43:20 [INFO] RPC is handled in path: /_go_rpc_127_0_0_1_19002 and debug path: /debug/gorpc_127.0.0.1:19002
+2024-04-21 16:43:20 [INFO] Bookie state is set to Running
+2024-04-21 16:43:20 [INFO] Bookie [22570] starts running in main loop...
+2024-04-21 16:43:20 [INFO] With config:
+ {
+  "ReplicateNumber": 3,
+  "MinimumReplicaNumber": 2,
+  "SegmentMaxSize": 33554432,
+  "StorageMaxSize": 268435456,
+  "StorageDirectoryPath": "/home/hoo/Filebase/project/pigeonmq/cmd/pigeonmq-bookie/storages/storage2",
+  "LogFilePath": "/home/hoo/Filebase/project/pigeonmq/logs",
+  "PermissibleDowntime": 3000000000,
+  "ZooKeeperClusterAddresses": [
+    "127.0.0.1:18001"
+  ],
+  "ZooKeeperConnectionTimeout": 3000000000,
+  "DefaultPeerCommunicationTimeout": 3000000000,
+  "IPAddress": "127.0.0.1",
+  "Port": 19002,
+  "CronTimer": 10000000000,
+  "RetentionHours": 604800000000000
+}
+2024-04-21 16:43:20 [INFO] Bookie received RPC CreateBackupSegment, args=&{t-seg}
+2024-04-21 16:43:20 [INFO] Bookie send leader crash event. event={leader crash 1 {t-seg}}
+2024-04-21 16:43:20 [INFO] handle event {Description:leader crash eType:1 args:{segmentName:t-seg}}
+2024-04-21 16:43:20 [INFO] Bookie handled RPC CreateBackupSegment: error=<nil>
+2024-04-21 16:43:20 [INFO] elected leader 127.0.0.1:19001
+2024-04-21 16:43:20 [INFO] Bookie send leader crash event. event={leader crash 1 {t-seg}}
+2024-04-21 16:43:20 [INFO] handle event {Description:leader crash eType:1 args:{segmentName:t-seg}}
+2024-04-21 16:43:20 [INFO] elected leader 127.0.0.1:19001
+2024-04-21 16:43:20 [INFO] Bookie send leader crash event. event={leader crash 1 {t-seg}}
+2024-04-21 16:43:20 [INFO] handle event {Description:leader crash eType:1 args:{segmentName:t-seg}}
+2024-04-21 16:43:20 [INFO] elected leader 127.0.0.1:19001
+2024-04-21 16:43:20 [INFO] Bookie send leader crash event. event={leader crash 1 {t-seg}}
+2024-04-21 16:43:20 [INFO] handle event {Description:leader crash eType:1 args:{segmentName:t-seg}}
+2024-04-21 16:43:20 [INFO] elected leader 127.0.0.1:19001
+2024-04-21 16:43:20 [INFO] Bookie send leader crash event. event={leader crash 1 {t-seg}}
+2024-04-21 16:43:20 [INFO] handle event {Description:leader crash eType:1 args:{segmentName:t-seg}}
+2024-04-21 16:43:20 [INFO] elected leader 127.0.0.1:19001
+2024-04-21 16:43:20 [INFO] Bookie send leader crash event. event={leader crash 1 {t-seg}}
+2024-04-21 16:43:20 [INFO] handle event {Description:leader crash eType:1 args:{segmentName:t-seg}}
+2024-04-21 16:43:20 [INFO] elected leader 127.0.0.1:19001
+2024-04-21 16:43:20 [INFO] Bookie send leader crash event. event={leader crash 1 {t-seg}}
+2024-04-21 16:43:20 [INFO] handle event {Description:leader crash eType:1 args:{segmentName:t-seg}}
+2024-04-21 16:43:20 [INFO] elected leader 127.0.0.1:19001
+2024-04-21 16:43:20 [INFO] Bookie send leader crash event. event={leader crash 1 {t-seg}}
+2024-04-21 16:43:20 [INFO] handle event {Description:leader crash eType:1 args:{segmentName:t-seg}}
+2024-04-21 16:43:20 [INFO] elected leader 127.0.0.1:19001
+2024-04-21 16:43:20 [INFO] Bookie send leader crash event. event={leader crash 1 {t-seg}}
+2024-04-21 16:43:20 [INFO] handle event {Description:leader crash eType:1 args:{segmentName:t-seg}}
+2024-04-21 16:43:20 [INFO] Bookie [22570] shutting down...
+2024-04-21 16:43:20 [INFO] Bookie state is set to Stopped
+2024-04-21 16:43:20 [ERROR] Failed to get the responsible bookies for this segment /segments/t-seg, err getSegmentBookiesOnZK(/segments/t-seg): zk.Get(/segments/t-seg/bookie0000000008) zk: connection closed
+2024-04-21 16:43:20 [INFO] Bookie [22570] shutting down...
+2024-04-21 16:43:20 [ERROR] Bookie [22570] shut down with error : already stopped
+2024-04-21 16:43:20 [INFO] ZooKeeper recv loop terminated: EOF
+2024-04-21 16:43:20 [INFO] ZooKeeper send loop terminated: <nil>
+2024-04-21 16:43:20 [INFO] Bookie [22570] shut down successfully

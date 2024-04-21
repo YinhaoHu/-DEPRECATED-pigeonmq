@@ -1,0 +1,8 @@
+2024-04-21 17:22:41 [INFO] start recovery process
+2024-04-21 17:22:41 [INFO] recovery: meet segment t-seg. ElapsedTime: 11.627313ms
+2024-04-21 17:22:41 [INFO] recovery: begin to be responsible for segment t-seg
+2024-04-21 17:22:41 [INFO] ZooKeeper connected to 127.0.0.1:18001
+2024-04-21 17:22:41 [INFO] ZooKeeper authenticated: id=72057594512081054, timeout=4000
+2024-04-21 17:22:41 [INFO] ZooKeeper re-submitting `0` credentials after reconnect
+2024-04-21 17:22:41 [INFO] initZK: create segment t-seg hinted by recovery
+2024-04-21 17:22:41 [ERROR] initZK: create segment t-seg hinted by recovery err zk: node does not exist

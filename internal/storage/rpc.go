@@ -15,15 +15,23 @@ import (
 )
 
 var (
-	ErrSegmentLag = errors.New("bookie: backup segment did not follow up the primary segment")
+	ErrLackFollowers   = errors.New("bookie: no enough followers response")
+	ErrSegmentLag      = errors.New("bookie: backup segment did not follow up the primary segment")
+	ErrSegmentExists   = errors.New("bookie: segment already exists")
+	ErrSegmentNotFound = errors.New("bookie: segment not found")
+	ErrSegmentBadRead  = errors.New("bookie: reading an open segment from a follower")
+	ErrSegmentClosed   = errors.New("bookie: segment already closed")
 )
 
+// CreatePrimarySegmentArgs represents the argument type of CreatePrimarySegment RPC.
 type CreatePrimarySegmentArgs struct {
-	SegmentName string        // The name of the segment to be created.
+	SegmentName string        // The name of the segment to be created. Typically, this is "topic/partition".
 	Timeout     time.Duration // Specify the timeout for the bookie to communicate with peers.
 }
 
 // CreatePrimarySegment creates a primary segment and this bookie is the leader of this segment initially.
+//
+// Guarantee: Returning without any error indicates the segment is replicated on ReplicaNumber bookies successfully.
 func (bk *Bookie) CreatePrimarySegment(args *CreatePrimarySegmentArgs, _ *struct{}) error {
 	err := error(nil)
 	defer func() {
@@ -37,7 +45,7 @@ func (bk *Bookie) CreatePrimarySegment(args *CreatePrimarySegmentArgs, _ *struct
 	// Checks whether this segment existed.
 	_, exist := bk.segments[args.SegmentName]
 	if exist {
-		return fmt.Errorf("bookie segment %v already exists", args.SegmentName)
+		return ErrSegmentExists
 	}
 
 	// Acquire ZooKeeper lock '/bookies' for selecting followers.
@@ -56,11 +64,17 @@ func (bk *Bookie) CreatePrimarySegment(args *CreatePrimarySegmentArgs, _ *struct
 		return err
 	}
 	bk.logger.Infof("Bookie got peers: %+v", peers)
+	for _, peer := range peers {
+		bk.logger.Infof("Bookie got peer: %+v", peer)
+	}
 
 	// select followers.
 	segmentBookies := make(map[string]*segmentBookieZNode)
 	segmentBookies["me"] = &segmentBookieZNode{address: bk.address}
 	followers, err := bk.selectSegmentFollower(peers, segmentBookies, bk.cfg.ReplicateNumber-1, bk.cfg.SegmentMaxSize)
+	if err != nil {
+		return err
+	}
 
 	// create segment on fs and zk.
 	fsErr := bk.createSegmentOnFS(args.SegmentName)
@@ -69,31 +83,53 @@ func (bk *Bookie) CreatePrimarySegment(args *CreatePrimarySegmentArgs, _ *struct
 	}
 	segmentZNodePath, bookieZNodePath, zkErr := bk.createSegmentOnZK(args.SegmentName)
 	if zkErr != nil {
-		return zkErr
+		if !errors.Is(zkErr, zk.ErrNodeExists) {
+			return zkErr
+		}
+		if bookieZNodePath == "" {
+			bookieZNodePath, zkErr = bk.createSegmentBookieOnZK(bk.address, segmentZNodePath, segmentHeaderSize)
+			if zkErr != nil {
+				return zkErr
+			}
+		}
 	}
 	zkErr = bk.updateBookieOnZK(bk.getStateOnZK())
 	if zkErr != nil {
 		return zkErr
 	}
-	bk.segments[args.SegmentName] = newSegment(segmentRolePrimary, segmentHeaderSize, bookieZNodePath, segmentZNodePath)
-	bk.logger.Infof("Bookie created a new segment: %v", args.SegmentName)
 
 	// notify some peers that they are the followers now.
 	createBackupSegmentArgs := &CreateBackupSegmentArgs{args.SegmentName}
+	successCount := atomic.Int32{}
+	successCount.Store(1)
 	wg := sync.WaitGroup{}
 	for _, follower := range followers {
 		wg.Add(1)
 		go func() {
 			rpcErr := bk.sendRPC(follower, "Bookie.CreateBackupSegment", &createBackupSegmentArgs, nil, args.Timeout)
+			if errors.Is(rpcErr, ErrSegmentExists) {
+				bk.logger.Warnf("Bookie got backup segment already exists: %v", rpcErr)
+				rpcErr = nil
+			}
 			if rpcErr != nil {
 				bk.logger.Errorf("CreateBackupSegment RPC failed: %v", rpcErr)
+			} else {
+				successCount.Add(1)
 			}
 			wg.Done()
 		}()
 	}
 	wg.Wait()
+	if successCount.Load() != bk.cfg.ReplicateNumber {
+		err = ErrLackFollowers
+	}
 
-	bk.watchSegmentPeersBG(segmentZNodePath)
+	// Everything works well, we make the state visible.
+	if err == nil {
+		bk.segments[args.SegmentName] = newSegment(segmentRolePrimary, segmentHeaderSize, bookieZNodePath, segmentZNodePath)
+		bk.watchSegmentPeersBG(segmentZNodePath)
+		bk.logger.Infof("Bookie created a new segment: %v", args.SegmentName)
+	}
 
 	return err
 }
@@ -117,7 +153,7 @@ func (bk *Bookie) CreateBackupSegment(args *CreateBackupSegmentArgs, _ *struct{}
 	// Checks whether this segment existed.
 	_, exist := bk.segments[args.SegmentName]
 	if exist {
-		return fmt.Errorf("bookie segment %v already exists", args.SegmentName)
+		return ErrSegmentExists
 	}
 
 	// create segment on local.
@@ -158,19 +194,37 @@ type ReadSegmentReply struct {
 }
 
 // ReadSegment reads maxSize bytes from the beginPos in the segment specified by segmentID.
+//
+// Guarantee: Satisfy the guarantee mentioned by `docs/specifications/storage-layer.md-overview`.
+// Duplication read is possible.
 func (bk *Bookie) ReadSegment(args *ReadSegmentArgs, reply *ReadSegmentReply) error {
 	err := error(nil)
 	bk.logger.Infof("Bookie received RPC ReadSegment, args=%v", *args)
 	defer func() {
 		bk.logger.Infof("Bookie handled RPC ReadSegment, error=%v", err)
 	}()
-	// Read without lock.
+
+	// Reading from an open backup segment is forbidden.
 	seg, exist := bk.segments[args.SegmentName]
 	if !exist {
-		return fmt.Errorf("bookie segment %v does not exist. Segments: %v", args.SegmentName, bk.segments)
+		return ErrSegmentNotFound
 	}
+	seg.mutex.Lock()
+	if seg.state != segmentStateClose && seg.role == segmentRoleBackup {
+		seg.mutex.Unlock()
+		return ErrSegmentBadRead
+	}
+	seg.mutex.Unlock()
+
+	// Read without lock, avoiding long time block when issuing IO.
 	maxSize := min(args.MaxSize, seg.bound.Load()-args.BeginPos)
 	reply.Data, reply.NBytes, err = bk.readSegmentOnFS(args.SegmentName, args.BeginPos, maxSize)
+
+	// TODO(Hoo@Future): Observe that if `Config.MinimumReplicaNumber` is greater than half of
+	//  `Config.ReplicaNumber`, and the segment offset, let's call it `off`, is included in
+	//  at least `Config.MinimumReplicaNumber` bookies, it should be regarded as safe to read
+	//  [0, `off]. That is an optimization to improve reduce the overhead of leader. Consider
+	//  to introduce a field named committed_offset.
 
 	return err
 }
@@ -182,10 +236,14 @@ type AppendPrimarySegmentArgs struct {
 }
 
 type AppendPrimarySegmentReply struct {
-	BeginPos int64
+	BeginPos int64 // The begin-pos of the newly added data entry.
 }
 
-// AppendPrimarySegment appends data in the segment specified by segmentID.
+// AppendPrimarySegment appends data in the segment specified by SegmentName.
+//
+// Guarantee: Returning without error indicates that the data has been successfully appended to
+// Configs.MinimumReplicaNumber bookies. The data appended to the current leader will be discarded
+// or duplicated in case of some failures.
 func (bk *Bookie) AppendPrimarySegment(args *AppendPrimarySegmentArgs, reply *AppendPrimarySegmentReply) error {
 	// Prepare response.
 	err := error(nil)
@@ -194,9 +252,16 @@ func (bk *Bookie) AppendPrimarySegment(args *AppendPrimarySegmentArgs, reply *Ap
 	defer func() { bk.logger.Infof("Bookie handled RPC AppendPrimarySegment, error=%v", err) }()
 	segmentPath := filepath.Join(filepath.Join(zkSegmentsPath, args.SegmentName))
 
-	// Acquire mutex for this segment.
-	bk.segments[args.SegmentName].mutex.Lock()
-	defer bk.segments[args.SegmentName].mutex.Unlock()
+	// Acquire mutex for this segment and check the existence and state of it.
+	seg, exist := bk.segments[args.SegmentName]
+	if !exist {
+		return ErrSegmentNotFound
+	}
+	seg.mutex.Lock()
+	defer seg.mutex.Unlock()
+	if seg.state == segmentStateClose {
+		return ErrSegmentClosed
+	}
 
 	// Get the other bookies responsible for this segment.
 	bookies, err := bk.getSegmentBookiesOnZK(segmentPath)
@@ -229,8 +294,8 @@ func (bk *Bookie) AppendPrimarySegment(args *AppendPrimarySegmentArgs, reply *Ap
 	wg.Wait()
 
 	// Check whether there are enough followers.
-	if atomic.LoadInt32(&successCount) < int32(bk.cfg.MinimumReplicaNumber) {
-		err = errors.New("bookie failed to append primary segment because the followers cannot response on time")
+	if atomic.LoadInt32(&successCount) < bk.cfg.MinimumReplicaNumber {
+		err = ErrLackFollowers
 		return err
 	}
 
@@ -264,15 +329,24 @@ type AppendBackupSegmentArgs struct {
 	BeginPos    int64
 }
 
+// AppendBackupSegment appends data in the segment specified by segmentID. This RPC is not public, which means
+// this RPC should be only invoked by segment leader.
 func (bk *Bookie) AppendBackupSegment(args *AppendBackupSegmentArgs, _ *struct{}) error {
 	err := error(nil)
 	bk.logger.Infof("Bookie received RPC AppendBackupSegment, segmentName=%v, dataLen=%v",
 		args.SegmentName, len(args.Data))
 	defer func() { bk.logger.Infof("Bookie hanlded AppendBackupSegment, error=%v", err) }()
 
-	// Acquire mutex for this segment.
-	bk.segments[args.SegmentName].mutex.Lock()
-	defer bk.segments[args.SegmentName].mutex.Unlock()
+	// Acquire mutex for this segment. Check the existence and state of it.
+	seg, exist := bk.segments[args.SegmentName]
+	if !exist {
+		return ErrSegmentNotFound
+	}
+	seg.mutex.Lock()
+	defer seg.mutex.Unlock()
+	if seg.state == segmentStateClose {
+		return ErrSegmentClosed
+	}
 
 	// In case some before append messages lost.
 	if bk.segments[args.SegmentName].bound.Load() < args.BeginPos {
@@ -307,6 +381,108 @@ func (bk *Bookie) AppendBackupSegment(args *AppendBackupSegmentArgs, _ *struct{}
 	bk.segments[args.SegmentName].bound.Add(int64(len(args.Data)))
 
 	return nil
+}
+
+type ClosePrimarySegmentArgs struct {
+	SegmentName string
+	Timeout     time.Duration
+}
+
+// ClosePrimarySegment closes the segment specified by SegmentName.
+//
+// Guarantee: Returning without error indicates that the data has been successfully closed in
+// Config.MinimumReplicaNumber bookies.
+func (bk *Bookie) ClosePrimarySegment(args *ClosePrimarySegmentArgs, _ *struct{}) error {
+	err := error(nil)
+	bk.logger.Infof("Bookie received RPC ClosePrimarySegment, segmentName=%v",
+		args.SegmentName)
+	defer func() {
+		bk.logger.Infof("Bookie hanlded ClosePrimarySegment, error=%v", err)
+	}()
+
+	seg, exists := bk.segments[args.SegmentName]
+	if !exists {
+		return ErrSegmentNotFound
+	}
+
+	// Update the state. It's safe to make state visible here.
+	seg.mutex.Lock()
+	err = bk.closeSegmentOnFS(args.SegmentName)
+	if err != nil {
+		bk.logger.Errorf("bookie met fs error when close segment %v: %v", args.SegmentName, err)
+		seg.mutex.Unlock()
+		return err
+	}
+	seg.state = segmentStateClose
+	seg.mutex.Unlock()
+
+	// Get followers.
+	segmentPath := filepath.Join(filepath.Join(zkSegmentsPath, args.SegmentName))
+	segmentBookies, err := bk.getSegmentBookiesOnZK(segmentPath)
+	if err != nil {
+		bk.logger.Errorf("Bookie failed to close primary segment %v, error: %v", args.SegmentName, err)
+		return err
+	}
+
+	// Now, we tell the followers to close the segment.
+	wg := sync.WaitGroup{}
+	closeBackupSegmentArgs := &CloseBackupSegmentArgs{args.SegmentName}
+	successCount := atomic.Int32{}
+	successCount.Store(1)
+	for _, bookie := range segmentBookies {
+		if bookie.address != bk.address {
+			wg.Add(1)
+			go func() {
+				rpcErr := bk.sendRPC(bookie.address, "Bookie.CloseBackupSegment", closeBackupSegmentArgs, nil, args.Timeout)
+				if errors.Is(rpcErr, ErrSegmentClosed) {
+					bk.logger.Warnf("ClosePrimarySegment: follower %v segment %v was closed already.",
+						bookie.address, args.SegmentName)
+					rpcErr = nil
+				}
+				if rpcErr != nil {
+					bk.logger.Errorf("ClosePrimarySegment: CloseBackupSegmentRPC error: %v, to %v", err, bookie.address)
+				} else {
+					successCount.Add(1)
+				}
+				wg.Done()
+			}()
+		}
+	}
+	wg.Wait()
+
+	if successCount.Load() < bk.cfg.MinimumReplicaNumber {
+		bk.logger.Errorf("ClosePrimarySegment: bookie failed to close primary segment because of no enough " +
+			"followers response on time.")
+		err = ErrLackFollowers
+	}
+
+	return nil
+}
+
+type CloseBackupSegmentArgs struct {
+	SegmentName string
+}
+
+func (bk *Bookie) CloseBackupSegment(args *CloseBackupSegmentArgs, _ *struct{}) error {
+	err := error(nil)
+	bk.logger.Infof("Bookie received RPC CloseBackupSegment, segmentName=%v", args.SegmentName)
+	defer func() { bk.logger.Infof("Bookie hanlded CloseBackupSegment, error=%v", err) }()
+
+	seg, exists := bk.segments[args.SegmentName]
+	if !exists {
+		return ErrSegmentNotFound
+	}
+	seg.mutex.Lock()
+	defer seg.mutex.Unlock()
+
+	err = bk.closeSegmentOnFS(args.SegmentName)
+	if err != nil {
+		bk.logger.Errorf("Bookie failed to close backup segment %v, error: %v", args.SegmentName, err)
+		return err
+	}
+	seg.state = segmentStateClose
+
+	return err
 }
 
 // initRPC initializes the RPC settings.
@@ -405,6 +581,7 @@ start:
 		err = client.Call(method, args, reply)
 	}
 
+	// Bookie on address is shutdown before. We try to reconnect to it.
 	if errors.Is(err, rpc.ErrShutdown) && !reconnected {
 		bk.logger.Infof("sendRPC: begin to reconnect %v", address)
 		exists = false

@@ -1,0 +1,43 @@
+2024-04-21 14:29:48 [INFO] start recovery process
+2024-04-21 14:29:48 [INFO] recovery: meet segment t-seg. ElapsedTime: 34.918238015s
+2024-04-21 14:29:48 [INFO] ZooKeeper connected to 127.0.0.1:18001
+2024-04-21 14:29:48 [INFO] ZooKeeper authenticated: id=72057594512080909, timeout=4000
+2024-04-21 14:29:48 [INFO] ZooKeeper re-submitting `0` credentials after reconnect
+2024-04-21 14:29:48 [INFO] RPC is handled in path: /_go_rpc_127_0_0_1_19001 and debug path: /debug/gorpc_127.0.0.1:19001
+2024-04-21 14:29:48 [INFO] Bookie state is set to Running
+2024-04-21 14:29:48 [INFO] Bookie [6870] starts running in main loop...
+2024-04-21 14:29:48 [INFO] With config:
+ {
+  "ReplicateNumber": 3,
+  "MinimumReplicaNumber": 2,
+  "SegmentMaxSize": 33554432,
+  "StorageMaxSize": 268435456,
+  "StorageDirectoryPath": "/home/hoo/Filebase/project/pigeonmq/cmd/pigeonmq-bookie/storages/storage1",
+  "LogFilePath": "/home/hoo/Filebase/project/pigeonmq/logs",
+  "PermissibleDowntime": 3000000000,
+  "ZooKeeperClusterAddresses": [
+    "127.0.0.1:18001"
+  ],
+  "ZooKeeperConnectionTimeout": 3000000000,
+  "DefaultPeerCommunicationTimeout": 3000000000,
+  "IPAddress": "127.0.0.1",
+  "Port": 19001,
+  "CronTimer": 10000000000,
+  "RetentionHours": 604800000000000
+}
+2024-04-21 14:29:49 [INFO] Bookie got peers: [0xc00020a080 0xc000c32200 0xc00020a220]
+2024-04-21 14:29:49 [INFO] Bookie got peer: &{Address:127.0.0.1:19002 StorageFree:234881024 StorageUsed:33554432}
+2024-04-21 14:29:49 [INFO] Bookie got peer: &{Address:127.0.0.1:19001 StorageFree:234881024 StorageUsed:33554432}
+2024-04-21 14:29:49 [INFO] Bookie got peer: &{Address:127.0.0.1:19003 StorageFree:939524096 StorageUsed:134217728}
+2024-04-21 14:29:49 [INFO] sendRPC: begin to connect to 127.0.0.1:19002
+2024-04-21 14:29:49 [INFO] sendRPC: connected to 127.0.0.1:19002
+2024-04-21 14:29:49 [INFO] sendRPC: begin to connect to 127.0.0.1:19003
+2024-04-21 14:29:49 [INFO] sendRPC: connected to 127.0.0.1:19003
+2024-04-21 14:29:49 [INFO] Bookie created a new segment: t-seg
+2024-04-21 14:29:49 [INFO] Bookie handled RPC CreatePrimarySegment, error=bookie: no enough followers
+2024-04-21 14:29:49 [INFO] Bookie [6870] shutting down...
+2024-04-21 14:29:49 [INFO] Bookie state is set to Stopped
+2024-04-21 14:29:49 [ERROR] watchSegmentPeersBG meet error zk: connection closed
+2024-04-21 14:29:49 [INFO] ZooKeeper recv loop terminated: EOF
+2024-04-21 14:29:49 [INFO] ZooKeeper send loop terminated: <nil>
+2024-04-21 14:29:49 [INFO] Bookie [6870] shut down successfully

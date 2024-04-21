@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"runtime"
 	"syscall"
@@ -89,10 +90,19 @@ func NewTestCase(name string, t *testing.T) *TestCase {
 	return c
 }
 
+// AcquireSudo acquires the user input password for super user mode.
+func (t *TestCase) AcquireSudo() {
+	cmd := exec.Command("sudo", "-v")
+	err := cmd.Run()
+	if err != nil {
+		t.test.Fatalf("acquire sudo error: %v", err)
+	}
+}
+
 // Begin marks the beginning of the test case.
 func (t *TestCase) Begin() {
 	t.beginTime = time.Now()
-	fmt.Printf("Testing: %v...\n", t.name)
+	fmt.Printf("Testing: %v(pid=%v)...\n", t.name, os.Getpid())
 }
 
 // Done marks the end of the test case.
@@ -104,6 +114,11 @@ func (t *TestCase) Done() {
 		usedTime := time.Now().Sub(t.beginTime)
 		fmt.Printf("\tPASS	%.2fs\n", float64(usedTime.Milliseconds())/float64(1000))
 	}
+}
+
+// Report tells the user in terminal the current progress of test. Typically used in a long time test.
+func (t *TestCase) Report(msg string) {
+	fmt.Printf("\t  Progress: %v\n", msg)
 }
 
 // StartProgressBar starts a progress bar with the given total progress.
