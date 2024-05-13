@@ -26,22 +26,6 @@ var (
 	ErrInvalidMaxSize  = errors.New("bookie: invalid max size")
 )
 
-/*
-TODO(Hoo@5.13): Introduce message border concept in ReadSegment and AppendSegment.
- Changes should be made overview:
-	- AppendSegment:
-		-> Leader: Form a message with the user data and send it to the follower.
-		-> Follower: Directly append the data as past(No change).
-	- ReadSegment:
-		-> Leader: only to the leader and when a bookie becomes the leader of a segment,
-					it should map the pos or lazily map it?
-		-> Follower: Nothing change because of No reading from unclosed segment from follower.
-		-> Closed segment: map?
-		-> Return whether the returned data includes the message or not.
-	- Note: now we don't implement batch reading and writing. Leave it to the future but support
-		the interface for future.
-*/
-
 // CreatePrimarySegmentArgs represents the argument type of CreatePrimarySegment RPC.
 type CreatePrimarySegmentArgs struct {
 	SegmentName string        // The name of the segment to be created. Typically, this is "topic/partition".
@@ -245,14 +229,17 @@ func (bk *Bookie) ReadSegment(args *ReadSegmentArgs, reply *ReadSegmentReply) er
 	if maxSize < msgHdr.Size {
 		return ErrInvalidMaxSize
 	}
-	// TODO(Hoo@Future): Batch read. One message one read is currently supported.
 
-	// TODO(Hoo@Future): Observe that if `Config.MinimumReplicaNumber` is greater than half of
-	//  `Config.ReplicaNumber`, and the segment offset, let's call it `off`, is included in
-	//  at least `Config.MinimumReplicaNumber` bookies, it should be regarded as safe to read
-	//  [0, `off]. That is an optimization to improve reduce the overhead of leader. Consider
-	//  to introduce a field named committed_offset.
-
+	/*
+			TODO(Hoo@Future):
+			  1. Observe that if `Config.MinimumReplicaNumber` is greater than half of
+			 	`Config.ReplicaNumber`, and the segment offset, let's call it `off`, is included in
+				at least `Config.MinimumReplicaNumber` bookies, it should be regarded as safe to read
+				[0, `off]. That is an optimization to improve reduce the overhead of leader. Consider
+				to introduce a field named committed_offset.
+			 2.	Batch read. One message one read is currently supported.
+		     3. Consider an array for every begin pos for batch read? Reason: less computation?
+	*/
 	return err
 }
 
