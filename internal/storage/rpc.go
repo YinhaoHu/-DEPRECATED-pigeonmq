@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/go-zookeeper/zk"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
 var (
@@ -21,7 +23,24 @@ var (
 	ErrSegmentNotFound = errors.New("bookie: segment not found")
 	ErrSegmentBadRead  = errors.New("bookie: reading an open segment from a follower")
 	ErrSegmentClosed   = errors.New("bookie: segment already closed")
+	ErrInvalidMaxSize  = errors.New("bookie: invalid max size")
 )
+
+/*
+TODO(Hoo@5.13): Introduce message border concept in ReadSegment and AppendSegment.
+ Changes should be made overview:
+	- AppendSegment:
+		-> Leader: Form a message with the user data and send it to the follower.
+		-> Follower: Directly append the data as past(No change).
+	- ReadSegment:
+		-> Leader: only to the leader and when a bookie becomes the leader of a segment,
+					it should map the pos or lazily map it?
+		-> Follower: Nothing change because of No reading from unclosed segment from follower.
+		-> Closed segment: map?
+		-> Return whether the returned data includes the message or not.
+	- Note: now we don't implement batch reading and writing. Leave it to the future but support
+		the interface for future.
+*/
 
 // CreatePrimarySegmentArgs represents the argument type of CreatePrimarySegment RPC.
 type CreatePrimarySegmentArgs struct {
@@ -184,13 +203,13 @@ func (bk *Bookie) CreateBackupSegment(args *CreateBackupSegmentArgs, _ *struct{}
 
 type ReadSegmentArgs struct {
 	SegmentName string
-	BeginPos    int64
-	MaxSize     int64
+	BeginPos    int
+	MaxSize     int
 }
 
 type ReadSegmentReply struct {
-	Data   []byte
-	NBytes int64 // Number of actual read bytes.
+	Data []byte
+	Next int // First byte of the next message which is the argument for the next ReadSegment.
 }
 
 // ReadSegment reads maxSize bytes from the beginPos in the segment specified by segmentID.
@@ -217,8 +236,16 @@ func (bk *Bookie) ReadSegment(args *ReadSegmentArgs, reply *ReadSegmentReply) er
 	seg.mutex.Unlock()
 
 	// Read without lock, avoiding long time block when issuing IO.
-	maxSize := min(args.MaxSize, seg.bound.Load()-args.BeginPos)
-	reply.Data, reply.NBytes, err = bk.readSegmentOnFS(args.SegmentName, args.BeginPos, maxSize)
+	maxSize := min(args.MaxSize, int(seg.bound.Load())-args.BeginPos)
+	data, _, err := bk.readSegmentOnFS(args.SegmentName, args.BeginPos, maxSize)
+	var msgHdr messageHeader
+	msgHdr.fromBytes(data[0:messageHeaderSize])
+	reply.Data = data[messageHeaderSize : messageHeaderSize+msgHdr.Size]
+	reply.Next = args.BeginPos + messageHeaderSize + msgHdr.Size
+	if maxSize < msgHdr.Size {
+		return ErrInvalidMaxSize
+	}
+	// TODO(Hoo@Future): Batch read. One message one read is currently supported.
 
 	// TODO(Hoo@Future): Observe that if `Config.MinimumReplicaNumber` is greater than half of
 	//  `Config.ReplicaNumber`, and the segment offset, let's call it `off`, is included in
@@ -236,14 +263,14 @@ type AppendPrimarySegmentArgs struct {
 }
 
 type AppendPrimarySegmentReply struct {
-	BeginPos int64 // The begin-pos of the newly added data entry.
+	BeginPos int // The begin-pos of the newly added data entry.
 }
 
 // AppendPrimarySegment appends data in the segment specified by SegmentName.
 //
 // Guarantee: Returning without error indicates that the data has been successfully appended to
 // Configs.MinimumReplicaNumber bookies. The data appended to the current leader will be discarded
-// or duplicated in case of some failures.
+// or duplicated in case of some failures if Config.MinimumReplicaNumber is configured to be too few.
 func (bk *Bookie) AppendPrimarySegment(args *AppendPrimarySegmentArgs, reply *AppendPrimarySegmentReply) error {
 	// Prepare response.
 	err := error(nil)
@@ -272,6 +299,11 @@ func (bk *Bookie) AppendPrimarySegment(args *AppendPrimarySegmentArgs, reply *Ap
 	myBookieZNode := bookies[myZNodeName]
 	delete(bookies, myZNodeName)
 
+	var msgData []byte
+	msgHdr := messageHeader{Size: len(args.Data)}
+	msgData = append(msgData, msgHdr.toBytes()...)
+	msgData = append(msgData, args.Data...)
+
 	// Wait for MinimumReplicaNumber-1 followers to response with timeout.
 	wg := sync.WaitGroup{}
 	successCount := int32(1)
@@ -279,7 +311,7 @@ func (bk *Bookie) AppendPrimarySegment(args *AppendPrimarySegmentArgs, reply *Ap
 		wg.Add(1)
 		go func(bookie *segmentBookieZNode) {
 			data, _, _ := bk.readSegmentOnFS(args.SegmentName, bookie.offset, bk.cfg.SegmentMaxSize)
-			data = append(data, args.Data...)
+			data = append(data, msgData...)
 			appendBackupSegmentArgs := &AppendBackupSegmentArgs{args.SegmentName, data, bookie.offset}
 
 			rpcErr := bk.sendRPC(bookie.address, "Bookie.AppendBackupSegment", &appendBackupSegmentArgs, nil, args.Timeout)
@@ -300,7 +332,7 @@ func (bk *Bookie) AppendPrimarySegment(args *AppendPrimarySegmentArgs, reply *Ap
 	}
 
 	// Update fs state.
-	reply.BeginPos, err = bk.appendSegmentOnFS(args.SegmentName, args.Data)
+	reply.BeginPos, err = bk.appendSegmentOnFS(args.SegmentName, msgData)
 	if err != nil {
 		return err
 	}
@@ -311,14 +343,14 @@ func (bk *Bookie) AppendPrimarySegment(args *AppendPrimarySegmentArgs, reply *Ap
 		return err
 	}
 
-	myBookieZNode.offset += int64(len(args.Data))
+	myBookieZNode.offset += len(msgData)
 	_, err = bk.zkConn.Set(bk.segments[args.SegmentName].znodePath, myBookieZNode.toBytes(), -1)
 	if err != nil {
 		return err
 	}
 
 	// Update bound.
-	bk.segments[args.SegmentName].bound.Add(int64(len(args.Data)))
+	bk.segments[args.SegmentName].bound.Add(int32(len(msgData)))
 
 	return nil
 }
@@ -326,7 +358,7 @@ func (bk *Bookie) AppendPrimarySegment(args *AppendPrimarySegmentArgs, reply *Ap
 type AppendBackupSegmentArgs struct {
 	SegmentName string
 	Data        []byte
-	BeginPos    int64
+	BeginPos    int
 }
 
 // AppendBackupSegment appends data in the segment specified by segmentID. This RPC is not public, which means
@@ -349,7 +381,7 @@ func (bk *Bookie) AppendBackupSegment(args *AppendBackupSegmentArgs, _ *struct{}
 	}
 
 	// In case some before append messages lost.
-	if bk.segments[args.SegmentName].bound.Load() < args.BeginPos {
+	if int(bk.segments[args.SegmentName].bound.Load()) < args.BeginPos {
 		return ErrSegmentLag
 	}
 
@@ -371,14 +403,14 @@ func (bk *Bookie) AppendBackupSegment(args *AppendBackupSegmentArgs, _ *struct{}
 		return err
 	}
 
-	myBookieZNode.offset += int64(len(args.Data))
+	myBookieZNode.offset += len(args.Data)
 	_, err = bk.zkConn.Set(bookieOnSegmentZNodePath, myBookieZNode.toBytes(), -1)
 	if err != nil {
 		return err
 	}
 
 	// Update bound.
-	bk.segments[args.SegmentName].bound.Add(int64(len(args.Data)))
+	bk.segments[args.SegmentName].bound.Add(int32(len(args.Data)))
 
 	return nil
 }
@@ -591,3 +623,19 @@ start:
 	}
 	return err
 }
+
+type messageHeader struct {
+	Size int
+}
+
+func (h *messageHeader) fromBytes(bytes []byte) {
+	h.Size = int(binary.BigEndian.Uint32(bytes[0:unsafe.Sizeof(uint32(0))]))
+}
+
+func (h *messageHeader) toBytes() []byte {
+	bytes := make([]byte, messageHeaderSize)
+	binary.BigEndian.PutUint32(bytes[0:unsafe.Sizeof(uint32(0))], uint32(h.Size))
+	return bytes
+}
+
+const messageHeaderSize = int(unsafe.Sizeof(messageHeader{}))

@@ -40,7 +40,7 @@ func CheckErrorAndFatalAsNeeded(err error, t *testing.T) {
 
 // GenerateRandomString generates a random string of the specified size in bytes,
 // containing ASCII characters 'a'-'z', 'A'-'Z', and '0'-'9'.
-func GenerateRandomString(size int64) string {
+func GenerateRandomString(size int) string {
 	// Define the set of valid characters
 	validChars := "aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzX0123456789"
 	validCharsLen := len(validChars)
@@ -63,13 +63,13 @@ func GenerateRandomString(size int64) string {
 }
 
 // GenerateData randomly generate a data which is 'size' bytes.
-func GenerateData(size int64) []byte {
+func GenerateData(size int) []byte {
 	str := GenerateRandomString(size)
 	return []byte(str)
 }
 
 // GenerateDataFast randomly generate a data which is 'size' bytes but very fast.
-func GenerateDataFast(size int64) []byte {
+func GenerateDataFast(size int) []byte {
 	data := make([]byte, size)
 	return data
 }
@@ -78,7 +78,7 @@ func GenerateDataFast(size int64) []byte {
 type TestCase struct {
 	name          string
 	beginTime     time.Time
-	totalProgress int64
+	totalProgress int
 	test          *testing.T
 }
 
@@ -122,7 +122,7 @@ func (t *TestCase) Report(msg string) {
 }
 
 // StartProgressBar starts a progress bar with the given total progress.
-func (t *TestCase) StartProgressBar(n int64) {
+func (t *TestCase) StartProgressBar(n int) {
 	t.totalProgress = n
 	t.RefreshProgressBar(0)
 }
@@ -139,7 +139,7 @@ func (t *TestCase) CheckAssumption(name string, condition func() bool) {
 }
 
 // RefreshProgressBar refreshes the progress bar with the current progress.
-func (t *TestCase) RefreshProgressBar(progress int64) {
+func (t *TestCase) RefreshProgressBar(progress int) {
 	fmt.Printf("\r progress: %.2f%%", 100*float64(progress)/float64(t.totalProgress))
 }
 

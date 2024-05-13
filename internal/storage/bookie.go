@@ -35,7 +35,7 @@ const (
 type segment struct {
 	mutex           sync.Mutex   // Mutex lock for concurrency control as needed.
 	role            segmentRole  // Role of this bookie in the segment.
-	bound           atomic.Int64 // Bound offset in the segment before which the data can be read with lock free.
+	bound           atomic.Int32 // Bound offset in the segment before which the data can be read with lock free.
 	znodePath       string       // ZNode path of this segment.
 	bookieZNodePath string       // ZNode path of this bookie for this segment.
 	state           segmentState // Open or close
@@ -55,8 +55,8 @@ type Bookie struct {
 	zkBookiePath  string          // Ephemeral znode name in ZooKeeper.
 	zkBookiesLock *zk.Lock        // Lock of /bookies path.
 
-	storageFree int64 // Free storage space size in byte.
-	storageUsed int64 // Used storage space size in byte(which is # times of a segment).
+	storageFree int   // Free storage space size in byte.
+	storageUsed int   // Used storage space size in byte(which is # times of a segment).
 	state       State // State of this bookie.
 
 	openSegmentFiles map[string]*os.File
@@ -143,10 +143,10 @@ func NewBookie(cfg *Config) (*Bookie, error) {
 	return bk, err
 }
 
-func newSegment(role segmentRole, maxOffset int64, bookieZNodePath string, segmentZNodePath string) *segment {
+func newSegment(role segmentRole, maxOffset int, bookieZNodePath string, segmentZNodePath string) *segment {
 	sg := new(segment)
 	sg.role = role
-	sg.bound.Store(maxOffset)
+	sg.bound.Store(int32(maxOffset))
 	sg.znodePath = segmentZNodePath
 	sg.bookieZNodePath = bookieZNodePath
 	sg.state = segmentStateOpen

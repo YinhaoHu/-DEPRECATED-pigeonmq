@@ -28,8 +28,8 @@ func TestLocalFileSystem(t *testing.T) {
 	tc.Begin()
 	defer tc.Done()
 
-	nIter := int64(32)
-	entrySize := int64(4096)
+	nIter := 32
+	entrySize := 4096
 	tc.CheckAssumption("SegmentMaxSize", func() bool {
 		return nIter*entrySize <= tb.cfg.SegmentMaxSize-segmentHeaderSize
 	})
@@ -39,10 +39,10 @@ func TestLocalFileSystem(t *testing.T) {
 	testutil.CheckErrorAndFatalAsNeeded(err, t)
 
 	segmentEntries := make([][]byte, 0)
-	segmentPositions := make([]int64, 0)
+	segmentPositions := make([]int, 0)
 	// Append many entries in the segment without exceeding the size limit.
 	tc.StartProgressBar(nIter)
-	for i := int64(0); i < nIter; i++ {
+	for i := 0; i < nIter; i++ {
 		entryData := testutil.GenerateData(entrySize)
 		segmentEntries = append(segmentEntries, entryData)
 		pos, appErr := tb.bk.appendSegmentOnFS(testutil.TestSegmentName, entryData)
@@ -52,32 +52,32 @@ func TestLocalFileSystem(t *testing.T) {
 	}
 	tc.EndProgressBar()
 
-	// Check read.
-	for i := int64(0); i < nIter; i++ {
-		readData, nRead, readErr := tb.bk.readSegmentOnFS(testutil.TestSegmentName, segmentPositions[i], int64(len(segmentEntries[i])))
-		if bytes.Compare(readData, segmentEntries[i]) != 0 {
-			t.Fatalf("read content error : %v != %v", readData, segmentEntries[i])
-		}
-		if nRead != int64(len(segmentEntries[i])) {
-			t.Fatalf("read size error : %v != %v", readData, segmentEntries[i])
-		}
-		testutil.CheckErrorAndFatalAsNeeded(readErr, t)
-	}
-
 	// Check payload.
 	hdr := tb.bk.getSegmentHeaderOnFS(testutil.TestSegmentName)
 	expectedHdr := segmentHeader{
-		payloadSize: func() int64 {
-			sum := int64(0)
+		payloadSize: func() int {
+			sum := 0
 			for _, b := range segmentEntries {
-				sum += int64(len(b))
+				sum += len(b)
 			}
 			return sum
 		}(),
 		state: segmentStateOpen,
 	}
 	if hdr != expectedHdr {
-		t.Fatalf("header error : %v != %v", hdr, expectedHdr)
+		t.Fatalf("segment header error : %v != %v", hdr, expectedHdr)
+	}
+
+	// Check read.
+	for i := 0; i < nIter; i++ {
+		readData, nRead, readErr := tb.bk.readSegmentOnFS(testutil.TestSegmentName, segmentPositions[i], len(segmentEntries[i]))
+		if nRead != (len(segmentEntries[i])) {
+			t.Fatalf("read size error(read != expected) : %v != %v", len(readData), len(segmentEntries[i]))
+		}
+		if bytes.Compare(readData, segmentEntries[i]) != 0 {
+			t.Fatalf("read content error : %v != %v", readData, segmentEntries[i])
+		}
+		testutil.CheckErrorAndFatalAsNeeded(readErr, t)
 	}
 
 	// Fill the segment. Expect error.
@@ -141,7 +141,13 @@ func TestCluster(t *testing.T) {
 	tc := testutil.NewTestCase("Cluster", t)
 	tc.Begin()
 	tc.AcquireSudo()
-	defer tc.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panic: %v", r)
+		} else {
+			tc.Done()
+		}
+	}()
 	tc.CheckAssumption("test directory check", func() bool {
 		realPathCmd := exec.Command("pwd")
 		realPathBytes, err := realPathCmd.Output()
@@ -254,9 +260,9 @@ func TestCluster(t *testing.T) {
 	// Append to leader.
 	tc.Report("Append data to primary segment")
 	appendData := make([][]byte, 0)
-	appendEntriesBeginPos := make([]int64, 0)
+	appendEntriesBeginPos := make([]int, 0)
 	numEntries := 4
-	entrySize := int64(1024)
+	entrySize := 1024
 	for i := 0; i < numEntries; i++ {
 		entry := testutil.GenerateData(entrySize)
 		appendData = append(appendData, entry)
@@ -281,14 +287,16 @@ func TestCluster(t *testing.T) {
 
 	// Read from ...
 	checkRead := func(bookieID int, fromOpen bool) {
+		nextBeginPos := segmentHeaderSize
 		for i := 0; i < numEntries; i++ {
 			readArgs := &ReadSegmentArgs{
 				SegmentName: segName,
-				BeginPos:    appendEntriesBeginPos[i],
-				MaxSize:     int64(len(appendData[i])),
+				BeginPos:    nextBeginPos,
+				MaxSize:     len(appendData[i]) + messageHeaderSize*2,
 			}
 			readReply := &ReadSegmentReply{}
 			err := bookies[bookieID].Call("Bookie.ReadSegment", readArgs, readReply)
+			nextBeginPos = readReply.Next
 			if fromOpen && bookieID != leaderBookieID {
 				if errors.Is(err, ErrSegmentBadRead) {
 					t.Fatalf("No reading from an open backup segment is violated. err : %v. expected: %v",

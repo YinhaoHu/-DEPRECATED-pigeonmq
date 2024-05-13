@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"pigeonmq/internal/util"
 	"strconv"
 	"strings"
 	"time"
@@ -15,8 +16,8 @@ type Config struct {
 	ReplicateNumber      int32 // Number of replicas of a segment
 	MinimumReplicaNumber int32 // Minimum number of replicas of an append-available segment.
 
-	SegmentMaxSize       int64  // Max size of a segment.
-	StorageMaxSize       int64  // Max size of storage can be used by the bookie in fs.
+	SegmentMaxSize       int    // Max size of a segment.
+	StorageMaxSize       int    // Max size of storage can be used by the bookie in fs.
 	StorageDirectoryPath string // Storage directory path in fs.
 	LogFilePath          string // Log file path in fs.
 
@@ -42,7 +43,7 @@ func NewConfig(filePath string) (*Config, error) {
 
 	fileScanner := bufio.NewScanner(file)
 	for {
-		key, v, getConfigErr := getOneConfig(fileScanner)
+		key, v, getConfigErr := util.GetOneConfig(fileScanner)
 		if getConfigErr != nil {
 			return nil, getConfigErr
 		}
@@ -67,13 +68,13 @@ func NewConfig(filePath string) (*Config, error) {
 			if err != nil {
 				return nil, err
 			}
-			cfg.SegmentMaxSize = segmentMaxSize
+			cfg.SegmentMaxSize = int(segmentMaxSize)
 		case "StorageMaxSize":
 			storageMaxSize, err := strconv.ParseInt(v, 10, 64)
 			if err != nil {
 				return nil, err
 			}
-			cfg.StorageMaxSize = storageMaxSize
+			cfg.StorageMaxSize = int(storageMaxSize)
 		case "LogFilePath":
 			cfg.LogFilePath = v
 		case "ZooKeeperCluster":
@@ -125,27 +126,7 @@ func NewConfig(filePath string) (*Config, error) {
 	return cfg, nil
 }
 
-// getOneConfig returns one configuration item from the scanner.
-func getOneConfig(scanner *bufio.Scanner) (string, string, error) {
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "#") || strings.TrimSpace(line) == "" {
-			continue // Skip comment lines and empty lines
-		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue // Skip lines without key=value format
-		}
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-		return key, value, nil
-	}
-	if err := scanner.Err(); err != nil {
-		return "", "", err
-	}
-	return "", "", nil
-}
-
+// toJsonString converts the config to a json format string.
 func (cfg *Config) toJsonString() string {
 	jsonBytes, _ := json.MarshalIndent(*cfg, "", "  ")
 	return string(jsonBytes)

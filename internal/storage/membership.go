@@ -46,7 +46,7 @@ func (s ByResourceUtilization) Less(i, j int) bool {
 // selectSegmentFollower selects n new bookies whose free storage is not less than minFree as followers.
 // returns n selected follower's address.
 func (bk *Bookie) selectSegmentFollower(bookies []*BookieZKState, segmentBookies map[string]*segmentBookieZNode,
-	n int32, minFree int64) (addresses []string, err error) {
+	n int32, minFree int) (addresses []string, err error) {
 	// If some bookies free storage is 0, delete them to avoid `divide by zero`.
 	for _, bookie := range bookies {
 		if bookie.StorageFree == 0 {

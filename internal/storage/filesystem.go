@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	segmentHeaderSize = int64(unsafe.Sizeof(segmentHeader{})) // Size of segment header in byte.
+	segmentHeaderSize = int(unsafe.Sizeof(segmentHeader{})) // Size of segment header in byte.
 )
 
 // segmentState represents the state of a segment.
@@ -23,23 +23,23 @@ const (
 
 // segmentHeader implements the representation of the header in the segment file.
 type segmentHeader struct {
-	payloadSize int64
+	payloadSize int
 	state       segmentState
 }
 
 // newSegmentHeader returns a segmentHeader from bytes.
 func newSegmentHeader(bytes []byte) *segmentHeader {
 	sh := new(segmentHeader)
-	sh.payloadSize = int64(binary.BigEndian.Uint64(bytes[:8]))
-	sh.state = segmentState(binary.BigEndian.Uint16(bytes[8:10]))
+	sh.payloadSize = int(binary.BigEndian.Uint32(bytes[:unsafe.Sizeof(sh.payloadSize)]))
+	sh.state = segmentState(binary.BigEndian.Uint16(bytes[unsafe.Sizeof(sh.payloadSize):unsafe.Sizeof(*sh)]))
 	return sh
 }
 
 // toBytes converts the segment header to bytes.
 func (sh *segmentHeader) toBytes() []byte {
 	bytes := make([]byte, segmentHeaderSize)
-	binary.BigEndian.PutUint64(bytes[0:8], uint64(sh.payloadSize))
-	binary.BigEndian.PutUint16(bytes[8:10], uint16(sh.state))
+	binary.BigEndian.PutUint32(bytes[0:unsafe.Sizeof(0)], uint32(sh.payloadSize))
+	binary.BigEndian.PutUint16(bytes[unsafe.Sizeof(0):unsafe.Sizeof(*sh)], uint16(sh.state))
 	return bytes
 }
 
@@ -63,7 +63,7 @@ func (bk *Bookie) createSegmentOnFS(segmentName string) error {
 	file := bk.getSegmentOnFS(segmentName)
 
 	// Preallocate space for the segment based on the configured segment maximum size.
-	err := file.Truncate(bk.cfg.SegmentMaxSize)
+	err := file.Truncate(int64(bk.cfg.SegmentMaxSize))
 	if err != nil {
 		return fmt.Errorf("failed to preallocate space for segment file: %w", err)
 	}
@@ -83,7 +83,7 @@ func (bk *Bookie) createSegmentOnFS(segmentName string) error {
 }
 
 // readSegmentOnFS reads no more than maxSize bytes of data from beginPos in the segment file.
-func (bk *Bookie) readSegmentOnFS(segmentName string, beginPos int64, maxSize int64) (data []byte, n int64, err error) {
+func (bk *Bookie) readSegmentOnFS(segmentName string, beginPos int, maxSize int) (data []byte, n int, err error) {
 	// Open the segment file for reading.
 	file := bk.getSegmentOnFS(segmentName)
 
@@ -98,17 +98,17 @@ func (bk *Bookie) readSegmentOnFS(segmentName string, beginPos int64, maxSize in
 	// Read the data from the file, limited to the specified maximum size.
 	readSize := min(header.payloadSize-(beginPos-segmentHeaderSize), maxSize)
 	buffer := make([]byte, readSize)
-	size, err := file.ReadAt(buffer, beginPos)
+	size, err := file.ReadAt(buffer, int64(beginPos))
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to read data from segment file: %w", err)
 	}
 
 	// Return the actually read data and its size.
-	return buffer[:size], int64(size), nil
+	return buffer[:size], size, nil
 }
 
 // appendSegmentOnFS appends data to the end of segment file.
-func (bk *Bookie) appendSegmentOnFS(segmentName string, data []byte) (dataBeginPos int64, err error) {
+func (bk *Bookie) appendSegmentOnFS(segmentName string, data []byte) (dataBeginPos int, err error) {
 	file := bk.getSegmentOnFS(segmentName)
 
 	// Read the current header to determine the size of the existing payload.
@@ -118,32 +118,32 @@ func (bk *Bookie) appendSegmentOnFS(segmentName string, data []byte) (dataBeginP
 		return 0, fmt.Errorf("failed to read header from segment file: %w", err)
 	}
 	header := newSegmentHeader(headerBytes)
-	newDataBeginPos := segmentHeaderSize + header.payloadSize
+	newDataBeginPos := (segmentHeaderSize) + header.payloadSize
 
 	err = bk.appendAtSegmentOnFS(segmentName, data, newDataBeginPos, file)
 
 	return newDataBeginPos, err
 }
 
-func (bk *Bookie) appendAtSegmentOnFS(segmentName string, data []byte, off int64, file *os.File) (err error) {
+func (bk *Bookie) appendAtSegmentOnFS(segmentName string, data []byte, off int, file *os.File) (err error) {
 	if file == nil {
 		file = bk.getSegmentOnFS(segmentName)
 	}
-	dataLen := int64(len(data))
+	dataLen := len(data)
 	// Check if appending the new data will exceed the maximum segment size.
 	if off+dataLen > bk.cfg.SegmentMaxSize {
 		return fmt.Errorf("appending data exceeds maximum segment size")
 	}
 
 	// Append the provided data to the end of the file.
-	_, err = file.WriteAt(data, off) // Append to the end of the payload
+	_, err = file.WriteAt(data, int64(off)) // Append to the end of the payload
 	if err != nil {
 		return fmt.Errorf("failed to append to the end of segment file: %w", err)
 	}
 
 	// Update the header with the new length of the payload.
 	hdr := segmentHeader{
-		payloadSize: off + dataLen - segmentHeaderSize,
+		payloadSize: off + dataLen - (segmentHeaderSize),
 		state:       0,
 	}
 	_, err = file.WriteAt(hdr.toBytes(), 0)
@@ -188,7 +188,7 @@ func (bk *Bookie) getSegmentHeaderOnFS(segmentName string) segmentHeader {
 }
 
 // getDirectoryFilesSize get the total size of all files in the directory without recursive search.
-func getDirectoryFilesSize(dirName string) (size int64, err error) {
+func getDirectoryFilesSize(dirName string) (size int, err error) {
 	var totalSize int64
 
 	// Open the directory
@@ -216,7 +216,7 @@ func getDirectoryFilesSize(dirName string) (size int64, err error) {
 	if err != nil {
 		return 0, err
 	}
-	return totalSize, nil
+	return int(totalSize), nil
 }
 
 func (bk *Bookie) scanAndSweepOnFS() {

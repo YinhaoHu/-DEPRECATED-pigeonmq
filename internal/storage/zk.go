@@ -73,7 +73,7 @@ func (bk *Bookie) initZK() error {
 		bk.logger.Infof("initZK: create segment %v hinted by recovery", segmentName)
 		segmentZNodePath := filepath.Join(zkSegmentsPath, segmentName)
 		bookieZNodePath, recoveryErr := bk.createSegmentBookieOnZK(bk.address, segmentZNodePath,
-			bk.segments[segmentName].bound.Load())
+			int(bk.segments[segmentName].bound.Load()))
 
 		if recoveryErr != nil {
 			if errors.Is(recoveryErr, zk.ErrNoNode) {
@@ -142,7 +142,7 @@ func (bk *Bookie) createSegmentOnZK(segmentName string) (segmentZNodePath string
 }
 
 // createSegmentBookieOnZK creates a bookie znode under a segment path.
-func (bk *Bookie) createSegmentBookieOnZK(address string, segmentZNodePath string, offset int64) (bookieZNodePath string, err error) {
+func (bk *Bookie) createSegmentBookieOnZK(address string, segmentZNodePath string, offset int) (bookieZNodePath string, err error) {
 	bookieZNodePath = filepath.Join(segmentZNodePath, zkSegmentBookieNamePrefix)
 	bookieZNode := segmentBookieZNode{address, offset}
 
@@ -307,7 +307,7 @@ func (bk *Bookie) getStateOnZK() *BookieZKState {
 // segmentBookieZNode represents the bookie znode under a segment path.
 type segmentBookieZNode struct {
 	address string // The IP address and port of this bookie.
-	offset  int64  // The current committed offset of the bookie in the segment's payload.
+	offset  int    // The current committed offset of the bookie in the segment's payload.
 }
 
 // toBytes convert the segmentBookieZnode variable to bytes.
@@ -321,12 +321,12 @@ func (s *segmentBookieZNode) toBytes() []byte {
 
 // newSegmentBookieZNode convert the bytes to a segmentBookieZNode instance.
 func newSegmentBookieZnode(data []byte) *segmentBookieZNode {
-	addrLen := len(data) - int(unsafe.Sizeof(int64(0)))
+	addrLen := len(data) - int(unsafe.Sizeof(0))
 	address := string(data[:addrLen])
-	offset := int64(binary.BigEndian.Uint64(data[addrLen:]))
+	offset := binary.BigEndian.Uint32(data[addrLen:])
 	return &segmentBookieZNode{
 		address: address,
-		offset:  offset,
+		offset:  int(offset),
 	}
 }
 
@@ -347,8 +347,8 @@ func (s *segmentMetadataZNode) toBytes() []byte {
 // This state is useful for service layer to deal with load balance.
 type BookieZKState struct {
 	Address     string
-	StorageFree int64 // number of bytes free in the storage.
-	StorageUsed int64 // number of used bytes in the storage
+	StorageFree int // number of bytes free in the storage.
+	StorageUsed int // number of used bytes in the storage
 }
 
 // ToBytes serializes the BookieZKState struct to bytes using gob.
